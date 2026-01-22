@@ -1,0 +1,49 @@
+# Binaries
+*.exe
+*.exe~
+*.dll
+*.so
+*.dylib
+zmsg
+cmd/zmsg
+
+# Test binary
+*.test
+
+# Output of go coverage
+*.out
+coverage.html
+
+# Go workspace
+go.work
+go.work.sum
+
+# Dependency directories
+vendor/
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Build
+bin/
+dist/
+
+# Local config (keep config.yaml.example)
+cmd/config.local.yaml
+*.local.yaml
+
+# Logs
+*.log
+logs/
+
+# Temp
+tmp/
+temp/

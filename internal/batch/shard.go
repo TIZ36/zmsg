@@ -46,7 +46,7 @@ func (s *Shard) Add(item BatchItem) error {
 func (s *Shard) determineType(item BatchItem) {
 	if item.Operation == "incr" {
 		s.batchType = BatchTypeCounter
-	} else if len(item.SQLTask) > 0 {
+	} else if item.SQLTask != nil {
 		// 这里可以根据SQL内容判断类型
 		s.batchType = BatchTypeContent
 	}

@@ -46,6 +46,11 @@ type ZMsg interface {
 	// 批量操作
 	Batch() BatchOperation
 
+	// 数据库迁移
+	Load(filePath string) *Migration
+	LoadSQL(sql string) *Migration
+	LoadDir(dirPath string) *MigrationSet
+
 	// 关闭
 	Close() error
 }
@@ -56,6 +61,18 @@ type SQLTask struct {
 	Params   []interface{} // 参数
 	TaskType TaskType      // 任务类型
 	BatchKey string        // 批处理键（用于聚合）
+}
+
+// WithType 设置任务类型（链式调用）
+func (t *SQLTask) WithType(taskType TaskType) *SQLTask {
+	t.TaskType = taskType
+	return t
+}
+
+// WithBatchKey 设置批处理键（链式调用）
+func (t *SQLTask) WithBatchKey(key string) *SQLTask {
+	t.BatchKey = key
+	return t
 }
 
 // TaskType 任务类型

@@ -8,87 +8,325 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
-	"github.com/yourorg/zmsg"
+	"github.com/stretchr/testify/suite"
+	"github.com/tiz36/zmsg/zmsg"
 )
 
-func TestZMsg_BasicOperations(t *testing.T) {
-	ctx := context.Background()
-
-	cfg := zmsg.DefaultConfig()
-	cfg.PostgresDSN = "postgresql://test:test@localhost/test?sslmode=disable"
-	cfg.RedisAddr = "localhost:6379"
-
-	zm, err := zmsg.New(ctx, cfg)
-	require.NoError(t, err)
-	defer zm.Close()
-
-	// Test CacheOnly
-	key := "test_key_1"
-	value := []byte("test_value_1")
-
-	err = zm.CacheOnly(ctx, key, value, zmsg.WithTTL(time.Hour))
-	assert.NoError(t, err)
-
-	// Test Get
-	retrieved, err := zm.Get(ctx, key)
-	assert.NoError(t, err)
-	assert.Equal(t, value, retrieved)
-
-	// Test Del
-	err = zm.Del(ctx, key)
-	assert.NoError(t, err)
-
-	// Test Get after delete
-	_, err = zm.Get(ctx, key)
-	assert.Error(t, err)
+// ZMsgTestSuite 测试套件
+type ZMsgTestSuite struct {
+	suite.Suite
+	ctx context.Context
+	zm  zmsg.ZMsg
 }
 
-func TestZMsg_CacheAndStore(t *testing.T) {
-	ctx := context.Background()
+// SetupSuite 测试套件初始化
+func (s *ZMsgTestSuite) SetupSuite() {
+	s.ctx = context.Background()
 
 	cfg := zmsg.DefaultConfig()
 	cfg.PostgresDSN = "postgresql://test:test@localhost/test?sslmode=disable"
 	cfg.RedisAddr = "localhost:6379"
+	cfg.QueueAddr = "localhost:6380"
+	cfg.BatchSize = 10 // 测试用小批量
 
-	zm, err := zmsg.New(ctx, cfg)
-	require.NoError(t, err)
-	defer zm.Close()
+	var err error
+	s.zm, err = zmsg.New(s.ctx, cfg)
+	require.NoError(s.T(), err)
+}
 
-	// Test CacheAndStore
-	key := "test_feed_1"
-	value := []byte(`{"content": "Hello World"}`)
+// TearDownSuite 测试套件清理
+func (s *ZMsgTestSuite) TearDownSuite() {
+	if s.zm != nil {
+		s.zm.Close()
+	}
+}
+
+// TestCacheOnly 测试CacheOnly
+func (s *ZMsgTestSuite) TestCacheOnly() {
+	key := "test_cache_only"
+	value := []byte("cache_only_value")
+
+	// 设置缓存
+	err := s.zm.CacheOnly(s.ctx, key, value, zmsg.WithTTL(time.Minute))
+	assert.NoError(s.T(), err)
+
+	// 验证缓存
+	cached, err := s.zm.Get(s.ctx, key)
+	assert.NoError(s.T(), err)
+	assert.Equal(s.T(), value, cached)
+
+	// 删除缓存
+	err = s.zm.Del(s.ctx, key)
+	assert.NoError(s.T(), err)
+
+	// 验证删除
+	_, err = s.zm.Get(s.ctx, key)
+	assert.Error(s.T(), err)
+}
+
+// TestCacheAndStore 测试CacheAndStore
+func (s *ZMsgTestSuite) TestCacheAndStore() {
+	key := "test_cache_and_store"
+	value := []byte(`{"name": "test", "value": 123}`)
 
 	sqlTask := &zmsg.SQLTask{
-		Query:  "INSERT INTO test_feeds (id, content) VALUES ($1, $2)",
+		Query: `
+            INSERT INTO test_data (id, data) 
+            VALUES ($1, $2) 
+            ON CONFLICT (id) DO UPDATE SET data = $2
+        `,
 		Params: []interface{}{key, value},
 	}
 
-	returnedID, err := zm.CacheAndStore(ctx, key, value, sqlTask)
-	assert.NoError(t, err)
-	assert.NotEmpty(t, returnedID)
+	// 缓存并存储
+	storedID, err := s.zm.CacheAndStore(s.ctx, key, value, sqlTask)
+	assert.NoError(s.T(), err)
+	assert.Equal(s.T(), key, storedID)
 
-	// Verify cache
-	cached, err := zm.Get(ctx, key)
-	assert.NoError(t, err)
-	assert.Equal(t, value, cached)
+	// 验证缓存
+	cached, err := s.zm.Get(s.ctx, key)
+	assert.NoError(s.T(), err)
+	assert.Equal(s.T(), value, cached)
 }
 
-func TestZMsg_Counter(t *testing.T) {
-	ctx := context.Background()
+// TestCacheAndDelayStore 测试延迟存储
+func (s *ZMsgTestSuite) TestCacheAndDelayStore() {
+	key := "test_delay_store"
+	value := []byte("delay_store_value")
 
-	cfg := zmsg.DefaultConfig()
-	cfg.PostgresDSN = "postgresql://test:test@localhost/test?sslmode=disable"
-	cfg.RedisAddr = "localhost:6379"
+	sqlTask := &zmsg.SQLTask{
+		Query:    "INSERT INTO test_queue (id, data) VALUES ($1, $2)",
+		Params:   []interface{}{key, value},
+		TaskType: zmsg.TaskTypeContent,
+	}
 
-	zm, err := zmsg.New(ctx, cfg)
-	require.NoError(t, err)
-	defer zm.Close()
+	// 延迟存储
+	err := s.zm.CacheAndDelayStore(s.ctx, key, value, sqlTask)
+	assert.NoError(s.T(), err)
 
-	// Test batch counter
-	feedID := "feed_123"
+	// 立即验证缓存
+	cached, err := s.zm.Get(s.ctx, key)
+	assert.NoError(s.T(), err)
+	assert.Equal(s.T(), value, cached)
 
-	// Simulate 1000 likes
-	for i := 0; i < 1000; i++ {
+	// 等待队列处理
+	time.Sleep(2 * time.Second)
+}
+
+// TestDelStore 测试删除并存储
+func (s *ZMsgTestSuite) TestDelStore() {
+	key := "test_del_store"
+	value := []byte("del_store_value")
+
+	// 先设置数据
+	sqlTask := &zmsg.SQLTask{
+		Query:  "INSERT INTO test_data (id, data) VALUES ($1, $2)",
+		Params: []interface{}{key, value},
+	}
+
+	_, err := s.zm.CacheAndStore(s.ctx, key, value, sqlTask)
+	require.NoError(s.T(), err)
+
+	// 删除SQL
+	delTask := &zmsg.SQLTask{
+		Query:  "DELETE FROM test_data WHERE id = $1",
+		Params: []interface{}{key},
+	}
+
+	// 删除并存储
+	err = s.zm.DelStore(s.ctx, key, delTask)
+	assert.NoError(s.T(), err)
+
+	// 验证删除
+	_, err = s.zm.Get(s.ctx, key)
+	assert.Error(s.T(), err)
+}
+
+// TestUpdateStore 测试更新并存储
+func (s *ZMsgTestSuite) TestUpdateStore() {
+	key := "test_update_store"
+	oldValue := []byte("old_value")
+	newValue := []byte("new_value")
+
+	// 先插入旧数据
+	insertTask := &zmsg.SQLTask{
+		Query:  "INSERT INTO test_data (id, data) VALUES ($1, $2)",
+		Params: []interface{}{key, oldValue},
+	}
+
+	_, err := s.zm.CacheAndStore(s.ctx, key, oldValue, insertTask)
+	require.NoError(s.T(), err)
+
+	// 更新SQL
+	updateTask := &zmsg.SQLTask{
+		Query:  "UPDATE test_data SET data = $1 WHERE id = $2",
+		Params: []interface{}{newValue, key},
+	}
+
+	// 更新并存储
+	err = s.zm.UpdateStore(s.ctx, key, newValue, updateTask)
+	assert.NoError(s.T(), err)
+
+	// 验证更新
+	updated, err := s.zm.Get(s.ctx, key)
+	assert.NoError(s.T(), err)
+	assert.Equal(s.T(), newValue, updated)
+}
+
+// TestNextID 测试ID生成
+func (s *ZMsgTestSuite) TestNextID() {
+	// 生成多个ID
+	ids := make(map[string]bool)
+
+	for i := 0; i < 100; i++ {
+		id, err := s.zm.NextID(s.ctx, "test")
+		assert.NoError(s.T(), err)
+		assert.Contains(s.T(), id, "test_")
+
+		// 确保ID唯一
+		assert.False(s.T(), ids[id])
+		ids[id] = true
+	}
+}
+
+// TestDBHit 测试布隆过滤器
+func (s *ZMsgTestSuite) TestDBHit() {
+	key := "test_bloom"
+
+	// 初始应该不在布隆过滤器中
+	hit := s.zm.DBHit(s.ctx, key)
+	assert.False(s.T(), hit)
+
+	// 存储后应该在布隆过滤器中
+	value := []byte("bloom_test")
+	sqlTask := &zmsg.SQLTask{
+		Query:  "INSERT INTO test_data (id, data) VALUES ($1, $2)",
+		Params: []interface{}{key, value},
+	}
+
+	_, err := s.zm.CacheAndStore(s.ctx, key, value, sqlTask)
+	require.NoError(s.T(), err)
+
+	// 现在应该在布隆过滤器中
+	hit = s.zm.DBHit(s.ctx, key)
+	assert.True(s.T(), hit)
+}
+
+// TestBatchOperation 测试批处理操作
+func (s *ZMsgTestSuite) TestBatchOperation() {
+	batch := s.zm.Batch()
+
+	// 添加多个操作
+	for i := 0; i < 5; i++ {
+		key := fmt.Sprintf("batch_key_%d", i)
+		value := []byte(fmt.Sprintf("batch_value_%d", i))
+		batch.CacheOnly(key, value, zmsg.WithTTL(time.Minute))
+	}
+
+	assert.Equal(s.T(), 5, batch.Size())
+
+	// 执行批处理
+	err := batch.Execute(s.ctx)
+	assert.NoError(s.T(), err)
+
+	// 验证所有数据都已缓存
+	for i := 0; i < 5; i++ {
+		key := fmt.Sprintf("batch_key_%d", i)
+		value, err := s.zm.Get(s.ctx, key)
+		assert.NoError(s.T(), err)
+		assert.Equal(s.T(), []byte(fmt.Sprintf("batch_value_%d", i)), value)
+	}
+}
+
+// TestSQLExec 测试SQL执行
+func (s *ZMsgTestSuite) TestSQLExec() {
+	// 创建测试表
+	createTask := &zmsg.SQLTask{
+		Query: `
+            CREATE TABLE IF NOT EXISTS test_sql_exec (
+                id VARCHAR(255) PRIMARY KEY,
+                name VARCHAR(255),
+                value INTEGER
+            )
+        `,
+	}
+
+	_, err := s.zm.SQLExec(s.ctx, createTask)
+	assert.NoError(s.T(), err)
+
+	// 插入数据
+	insertTask := &zmsg.SQLTask{
+		Query:  "INSERT INTO test_sql_exec (id, name, value) VALUES ($1, $2, $3)",
+		Params: []interface{}{"test_id", "test_name", 123},
+	}
+
+	result, err := s.zm.SQLExec(s.ctx, insertTask)
+	assert.NoError(s.T(), err)
+	assert.Equal(s.T(), int64(1), result.RowsAffected)
+
+	// 查询数据
+	selectTask := &zmsg.SQLTask{
+		Query:  "SELECT COUNT(*) FROM test_sql_exec WHERE value > $1",
+		Params: []interface{}{100},
+	}
+
+	result, err = s.zm.SQLExec(s.ctx, selectTask)
+	assert.NoError(s.T(), err)
+}
+
+// TestConcurrentOperations 测试并发操作
+func (s *ZMsgTestSuite) TestConcurrentOperations() {
+	const numWorkers = 10
+	const numOps = 100
+
+	done := make(chan bool, numWorkers)
+	errCh := make(chan error, numWorkers*numOps)
+
+	for w := 0; w < numWorkers; w++ {
+		go func(workerID int) {
+			for i := 0; i < numOps; i++ {
+				key := fmt.Sprintf("concurrent_%d_%d", workerID, i)
+				value := []byte(fmt.Sprintf("value_%d_%d", workerID, i))
+
+				sqlTask := &zmsg.SQLTask{
+					Query:  "INSERT INTO test_concurrent (id, data) VALUES ($1, $2) ON CONFLICT DO NOTHING",
+					Params: []interface{}{key, value},
+				}
+
+				_, err := s.zm.CacheAndStore(s.ctx, key, value, sqlTask)
+				if err != nil {
+					errCh <- err
+				}
+
+				// 读取验证
+				cached, err := s.zm.Get(s.ctx, key)
+				if err != nil || !assert.Equal(s.T(), value, cached) {
+					errCh <- fmt.Errorf("read failed for key %s: %v", key, err)
+				}
+			}
+			done <- true
+		}(w)
+	}
+
+	// 等待所有goroutine完成
+	for w := 0; w < numWorkers; w++ {
+		<-done
+	}
+
+	close(errCh)
+
+	// 检查错误
+	for err := range errCh {
+		assert.NoError(s.T(), err)
+	}
+}
+
+// TestCounterBatch 测试计数器批处理
+func (s *ZMsgTestSuite) TestCounterBatch() {
+	feedID := "test_feed_counter"
+
+	// 模拟多个点赞
+	for i := 0; i < 50; i++ {
 		userID := fmt.Sprintf("user_%d", i)
 		key := fmt.Sprintf("like:%s:%s", feedID, userID)
 
@@ -99,103 +337,15 @@ func TestZMsg_Counter(t *testing.T) {
 			BatchKey: fmt.Sprintf("like_count:%s", feedID),
 		}
 
-		err = zm.CacheAndDelayStore(ctx, key, []byte("1"), sqlTask)
-		assert.NoError(t, err)
+		err := s.zm.CacheAndDelayStore(s.ctx, key, []byte("1"), sqlTask)
+		assert.NoError(s.T(), err)
 	}
 
-	// Wait for batch flush
-	time.Sleep(6 * time.Second)
+	// 等待批处理
+	time.Sleep(3 * time.Second)
 }
 
-func TestZMsg_NextID(t *testing.T) {
-	ctx := context.Background()
-
-	cfg := zmsg.DefaultConfig()
-	cfg.PostgresDSN = "postgresql://test:test@localhost/test?sslmode=disable"
-	cfg.RedisAddr = "localhost:6379"
-
-	zm, err := zmsg.New(ctx, cfg)
-	require.NoError(t, err)
-	defer zm.Close()
-
-	// Test ID generation
-	id1, err := zm.NextID(ctx, "feed")
-	assert.NoError(t, err)
-	assert.Contains(t, id1, "feed_")
-
-	id2, err := zm.NextID(ctx, "user")
-	assert.NoError(t, err)
-	assert.Contains(t, id2, "user_")
-
-	assert.NotEqual(t, id1, id2)
-}
-
-func TestZMsg_BatchOperation(t *testing.T) {
-	ctx := context.Background()
-
-	cfg := zmsg.DefaultConfig()
-	cfg.PostgresDSN = "postgresql://test:test@localhost/test?sslmode=disable"
-	cfg.RedisAddr = "localhost:6379"
-
-	zm, err := zmsg.New(ctx, cfg)
-	require.NoError(t, err)
-	defer zm.Close()
-
-	// Create batch
-	batch := zm.Batch()
-
-	// Add multiple operations
-	for i := 0; i < 10; i++ {
-		key := fmt.Sprintf("batch_key_%d", i)
-		value := []byte(fmt.Sprintf("batch_value_%d", i))
-
-		batch.CacheOnly(key, value, zmsg.WithTTL(time.Hour))
-	}
-
-	assert.Equal(t, 10, batch.Size())
-
-	// Execute batch
-	err = batch.Execute(ctx)
-	assert.NoError(t, err)
-
-	// Verify all items are cached
-	for i := 0; i < 10; i++ {
-		key := fmt.Sprintf("batch_key_%d", i)
-		value, err := zm.Get(ctx, key)
-		assert.NoError(t, err)
-		assert.Equal(t, []byte(fmt.Sprintf("batch_value_%d", i)), value)
-	}
-}
-
-func TestZMsg_QueryPipeline(t *testing.T) {
-	ctx := context.Background()
-
-	cfg := zmsg.DefaultConfig()
-	cfg.PostgresDSN = "postgresql://test:test@localhost/test?sslmode=disable"
-	cfg.RedisAddr = "localhost:6379"
-
-	zm, err := zmsg.New(ctx, cfg)
-	require.NoError(t, err)
-	defer zm.Close()
-
-	key := "pipeline_test"
-	value := []byte("pipeline_value")
-
-	// First query should go to DB
-	_, err = zm.Get(ctx, key)
-	assert.Error(t, err) // Not found
-
-	// Store it
-	sqlTask := &zmsg.SQLTask{
-		Query:  "INSERT INTO test_data (id, data) VALUES ($1, $2)",
-		Params: []interface{}{key, value},
-	}
-
-	_, err = zm.CacheAndStore(ctx, key, value, sqlTask)
-	assert.NoError(t, err)
-
-	// Second query should hit cache
-	retrieved, err := zm.Get(ctx, key)
-	assert.NoError(t, err)
-	assert.Equal(t, value, retrieved)
+// RunTests 运行所有测试
+func TestZMsgSuite(t *testing.T) {
+	suite.Run(t, new(ZMsgTestSuite))
 }

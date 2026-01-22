@@ -2,81 +2,270 @@ package cache
 
 import (
 	"context"
+	"fmt"
 	"sync"
+	"time"
 
 	"github.com/bits-and-blooms/bloom/v3"
 	"github.com/go-redis/redis/v8"
 )
 
-// bloomFilter 布隆过滤器
-type bloomFilter struct {
+// BloomFilter 布隆过滤器
+type BloomFilter struct {
 	redis  *redis.Client
-	key    string
+	config *BloomConfig
 	filter *bloom.BloomFilter
 	mu     sync.RWMutex
+
+	// 本地缓存（提高性能）
+	localCache map[string]bool
+	localMu    sync.RWMutex
 }
 
-// newBloomFilter 创建布隆过滤器
-func newBloomFilter(redis *redis.Client, capacity int64, errorRate float64) *bloomFilter {
-	filter := bloom.NewWithEstimates(uint(capacity), errorRate)
+// BloomConfig 布隆过滤器配置
+type BloomConfig struct {
+	Key              string
+	Capacity         uint
+	ErrorRate        float64
+	SyncInterval     time.Duration
+	EnableLocalCache bool
+}
 
-	return &bloomFilter{
-		redis:  redis,
-		key:    "zmsg:bloom:filter",
-		filter: filter,
+// NewBloomFilter 创建布隆过滤器
+func NewBloomFilter(config *BloomConfig, redisClient *redis.Client) *BloomFilter {
+	if config == nil {
+		config = &BloomConfig{
+			Key:              "zmsg:bloom:filter",
+			Capacity:         1000000,
+			ErrorRate:        0.01,
+			SyncInterval:     30 * time.Second,
+			EnableLocalCache: true,
+		}
 	}
+
+	bf := &BloomFilter{
+		redis:  redisClient,
+		config: config,
+		filter: bloom.NewWithEstimates(config.Capacity, config.ErrorRate),
+	}
+
+	if config.EnableLocalCache {
+		bf.localCache = make(map[string]bool)
+	}
+
+	// 从Redis加载布隆过滤器
+	if err := bf.loadFromRedis(context.Background()); err != nil {
+		// 如果加载失败，创建新的布隆过滤器
+		bf.filter = bloom.NewWithEstimates(config.Capacity, config.ErrorRate)
+	}
+
+	// 启动同步协程
+	if config.SyncInterval > 0 {
+		go bf.syncLoop(context.Background())
+	}
+
+	return bf
 }
 
 // Add 添加元素
-func (b *bloomFilter) Add(ctx context.Context, key string) error {
+func (b *BloomFilter) Add(ctx context.Context, key string) error {
+	b.mu.Lock()
+	b.filter.Add([]byte(key))
+	b.mu.Unlock()
+
+	// 更新本地缓存
+	if b.config.EnableLocalCache {
+		b.localMu.Lock()
+		b.localCache[key] = true
+		b.localMu.Unlock()
+	}
+
+	return nil
+}
+
+// AddBatch 批量添加元素
+func (b *BloomFilter) AddBatch(ctx context.Context, keys []string) error {
+	b.mu.Lock()
+	for _, key := range keys {
+		b.filter.Add([]byte(key))
+	}
+	b.mu.Unlock()
+
+	// 更新本地缓存
+	if b.config.EnableLocalCache {
+		b.localMu.Lock()
+		for _, key := range keys {
+			b.localCache[key] = true
+		}
+		b.localMu.Unlock()
+	}
+
+	return nil
+}
+
+// Test 测试元素是否存在
+func (b *BloomFilter) Test(ctx context.Context, key string) bool {
+	// 先检查本地缓存（如果启用）
+	if b.config.EnableLocalCache {
+		b.localMu.RLock()
+		exists, found := b.localCache[key]
+		b.localMu.RUnlock()
+
+		if found {
+			return exists
+		}
+	}
+
+	b.mu.RLock()
+	exists := b.filter.Test([]byte(key))
+	b.mu.RUnlock()
+
+	// 更新本地缓存
+	if b.config.EnableLocalCache {
+		b.localMu.Lock()
+		b.localCache[key] = exists
+		b.localMu.Unlock()
+	}
+
+	return exists
+}
+
+// TestBatch 批量测试元素
+func (b *BloomFilter) TestBatch(ctx context.Context, keys []string) (map[string]bool, error) {
+	results := make(map[string]bool)
+
+	for _, key := range keys {
+		results[key] = b.Test(ctx, key)
+	}
+
+	return results, nil
+}
+
+// Delete 删除元素（近似删除）
+func (b *BloomFilter) Delete(ctx context.Context, key string) error {
+	// 标准布隆过滤器不支持删除
+	// 这里我们实现一个计数布隆过滤器或者使用其他方法
+
+	// 简单实现：在本地缓存中标记为不存在
+	if b.config.EnableLocalCache {
+		b.localMu.Lock()
+		b.localCache[key] = false
+		b.localMu.Unlock()
+	}
+
+	return nil
+}
+
+// Clear 清空布隆过滤器
+func (b *BloomFilter) Clear(ctx context.Context) error {
 	b.mu.Lock()
 	defer b.mu.Unlock()
 
-	b.filter.Add([]byte(key))
+	// 创建新的布隆过滤器
+	b.filter = bloom.NewWithEstimates(b.config.Capacity, b.config.ErrorRate)
 
-	// 序列化并存储到 Redis
+	// 清空本地缓存
+	if b.config.EnableLocalCache {
+		b.localMu.Lock()
+		b.localCache = make(map[string]bool)
+		b.localMu.Unlock()
+	}
+
+	// 清空Redis中的布隆过滤器
+	return b.redis.Del(ctx, b.config.Key).Err()
+}
+
+// loadFromRedis 从Redis加载布隆过滤器
+func (b *BloomFilter) loadFromRedis(ctx context.Context) error {
+	data, err := b.redis.Get(ctx, b.config.Key).Bytes()
+	if err != nil {
+		if err == redis.Nil {
+			return nil // 不存在是正常的
+		}
+		return err
+	}
+
+	b.mu.Lock()
+	defer b.mu.Unlock()
+
+	return b.filter.UnmarshalBinary(data)
+}
+
+// saveToRedis 保存布隆过滤器到Redis
+func (b *BloomFilter) saveToRedis(ctx context.Context) error {
+	b.mu.RLock()
+	defer b.mu.RUnlock()
+
 	data, err := b.filter.MarshalBinary()
 	if err != nil {
 		return err
 	}
 
-	return b.redis.Set(ctx, b.key, data, 0).Err()
+	// 保存到Redis，设置过期时间（可选）
+	return b.redis.Set(ctx, b.config.Key, data, 24*time.Hour).Err()
 }
 
-// Test 测试元素是否存在
-func (b *bloomFilter) Test(ctx context.Context, key string) bool {
+// syncLoop 同步循环
+func (b *BloomFilter) syncLoop(ctx context.Context) {
+	ticker := time.NewTicker(b.config.SyncInterval)
+	defer ticker.Stop()
+
+	for {
+		select {
+		case <-ctx.Done():
+			// 退出前保存一次
+			b.saveToRedis(context.Background())
+			return
+
+		case <-ticker.C:
+			// 定期同步到Redis
+			if err := b.saveToRedis(context.Background()); err != nil {
+				// 记录错误但不中断
+				fmt.Printf("Failed to sync bloom filter to Redis: %v\n", err)
+			}
+		}
+	}
+}
+
+// GetStats 获取统计信息
+func (b *BloomFilter) GetStats() map[string]interface{} {
 	b.mu.RLock()
+	defer b.mu.RUnlock()
 
-	// 如果内存中有，直接返回
-	if b.filter.Test([]byte(key)) {
-		b.mu.RUnlock()
-		return true
+	stats := make(map[string]interface{})
+
+	// 计算布隆过滤器统计信息
+	k := b.filter.K()
+	m := b.filter.Cap()
+	n := b.filter.ApproximatedSize()
+
+	stats["k"] = k
+	stats["m"] = m
+	stats["n"] = n
+	stats["capacity"] = b.config.Capacity
+	stats["error_rate"] = b.config.ErrorRate
+
+	// 计算假阳性概率
+	if n > 0 {
+		falsePositiveProb := bloom.EstimateFalsePositiveRate(k, m, uint(n))
+		stats["false_positive_probability"] = falsePositiveProb
 	}
-	b.mu.RUnlock()
 
-	// 从 Redis 加载
-	data, err := b.redis.Get(ctx, b.key).Bytes()
-	if err != nil {
-		return false
+	// 本地缓存大小
+	if b.config.EnableLocalCache {
+		b.localMu.RLock()
+		stats["local_cache_size"] = len(b.localCache)
+		b.localMu.RUnlock()
 	}
 
-	b.mu.Lock()
-	defer b.mu.Unlock()
-
-	// 反序列化
-	if err := b.filter.UnmarshalBinary(data); err != nil {
-		return false
-	}
-
-	return b.filter.Test([]byte(key))
+	return stats
 }
 
-// Delete 删除元素（近似删除）
-func (b *bloomFilter) Delete(ctx context.Context, key string) {
-	b.mu.Lock()
-	defer b.mu.Unlock()
+// Close 关闭布隆过滤器
+func (b *BloomFilter) Close() error {
+	// 保存到Redis
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
 
-	// 重置对应的位（如果支持的话）
-	// 注意：标准布隆过滤器不支持删除
-	// 这里我们记录删除的key，在Test时排除
+	return b.saveToRedis(ctx)
 }

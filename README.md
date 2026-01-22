@@ -17,8 +17,8 @@ zmsg 是一个为大规模消息/Feed系统设计的存储解决方案库，提�
 ### 安装
 
 ```bash
-go get github.com/yourorg/zmsg
-import "github.com/yourorg/zmsg"
+go get github.com/tiz36/zmsg
+import "github.com/tiz36/zmsg"
 ```
 
 ### 基本用法

@@ -2,18 +2,6 @@ package zmsg
 
 import "time"
 
-// Options 选项
-type Options struct {
-	TTL         time.Duration
-	Consistency Consistency
-	SyncPersist bool
-	Priority    int
-	Tags        []string
-}
-
-// Option 函数
-type Option func(*Options)
-
 // WithTTL 设置过期时间
 func WithTTL(ttl time.Duration) Option {
 	return func(o *Options) {

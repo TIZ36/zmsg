@@ -1,0 +1,44 @@
+version: '3.8'
+
+services:
+  postgres:
+    image: postgres:15-alpine
+    environment:
+      POSTGRES_USER: test
+      POSTGRES_PASSWORD: test
+      POSTGRES_DB: test
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./internal/store/schema.sql:/docker-entrypoint-initdb.d/init.sql
+
+  redis-cache:
+    image: redis:7-alpine
+    ports:
+      - "6379:6379"
+    command: redis-server --appendonly yes
+
+  redis-queue:
+    image: redis:7-alpine
+    ports:
+      - "6380:6379"
+    command: redis-server --appendonly yes
+
+  zmsg-test:
+    build: .
+    depends_on:
+      - postgres
+      - redis-cache
+      - redis-queue
+    environment:
+      ZMSG_POSTGRES_DSN: "postgresql://test:test@postgres/test?sslmode=disable"
+      ZMSG_REDIS_ADDR: "redis-cache:6379"
+      ZMSG_QUEUE_ADDR: "redis-queue:6379"
+    volumes:
+      - .:/app
+    working_dir: /app
+    command: go test -v ./tests/...
+
+volumes:
+  postgres_data:

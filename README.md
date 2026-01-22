@@ -1,116 +1,126 @@
-# zmsg - 高性能消息存储解决方案库
+# zmsg
 
-zmsg 是一个为大规模消息/Feed系统设计的存储解决方案库，提供了多级缓存、异步持久化、批处理聚合等高级特性。
+高性能消息/Feed 存储引擎，专为大规模社交场景设计。
 
 ## 特性
 
-- **多级缓存**: L1(本地内存) + L2(Redis) + 布隆过滤器
-- **自动ID生成**: 基于雪花算法，自动节点管理
-- **异步持久化**: Redis队列 + 批量写入
-- **批处理聚合**: 高并发计数器聚合（如点赞、关注）
-- **SQL集成**: 支持自定义 PostgreSQL SQL
-- **一致性级别**: 最终一致性 / 强一致性
-- **监控指标**: Prometheus 指标暴露
+- **多级缓存** — L1 本地 + L2 Redis + 布隆过滤器，自动穿透保护
+- **延迟写入** — 先缓存后异步落库，应对高并发写入
+- **批量聚合** — 计数器自动聚合（点赞、关注等），减少 DB 压力
+- **分布式 ID** — 雪花算法 + PostgreSQL 节点自动分配
+- **SQL 迁移** — 增量迁移，自动跳过已执行
 
-## 快速开始
-
-### 安装
+## 安装
 
 ```bash
 go get github.com/tiz36/zmsg
-import "github.com/tiz36/zmsg"
 ```
 
-### 基本用法
-ctx := context.Background()
+## 快速开始
 
-// 初始化
-cfg := zmsg.DefaultConfig()
-cfg.PostgresDSN = "postgresql://user:pass@localhost/db"
-cfg.RedisAddr = "localhost:6379"
+```go
+package main
 
-zm, err := zmsg.New(ctx, cfg)
-if err != nil {
-    panic(err)
+import (
+    "context"
+    "github.com/tiz36/zmsg/zmsg"
+)
+
+func main() {
+    ctx := context.Background()
+
+    // 1. 初始化
+    cfg, _ := zmsg.LoadConfig("config.yaml")
+    zm, _ := zmsg.New(ctx, cfg)
+    defer zm.Close()
+
+    // 2. 数据库迁移
+    zm.LoadDir("schema").Migrate(ctx)
+
+    // 3. 生成 ID
+    id, _ := zm.NextID(ctx, "feed")
+
+    // 4. 写入（缓存 + DB）
+    data := []byte(`{"content": "Hello"}`)
+    task := zmsg.SQL("INSERT INTO feeds (id, content) VALUES (?, ?)", id, "Hello")
+    zm.CacheAndStore(ctx, id, data, task)
+
+    // 5. 读取（自动走缓存）
+    result, _ := zm.Get(ctx, id)
 }
-defer zm.Close()
+```
 
-// 发布 Feed
-feedID, _ := zm.NextID(ctx, "feed")
-feedData := []byte(`{"content": "Hello"}`)
+## SQL 构建
 
-sqlTask := &zmsg.SQLTask{
-    Query: "INSERT INTO feeds VALUES ($1, $2)",
-    Params: []interface{}{feedID, feedData},
-}
+支持两种方式，按场景选择：
 
-id, err := zm.CacheAndStore(ctx, feedID, feedData, sqlTask)
+```go
+// 方式一：原生 SQL（简单场景）
+task := zmsg.SQL("UPDATE feeds SET content = ? WHERE id = ?", content, id)
 
-// 查询
-data, err := zm.Get(ctx, feedID)
+// 方式二：Builder（复杂场景）
+task := zmsg.NewBuilder().
+    Insert("feeds", map[string]interface{}{"id": id, "content": content}).
+    OnConflict("id").
+    DoUpdate("content").
+    Build()
+```
 
-// 缓存操作
-CacheOnly(ctx, key, value, opts...)
-CacheAndStore(ctx, key, value, sqlTask, opts...)
-CacheAndDelayStore(ctx, key, value, sqlTask, opts...)
+## 核心 API
 
-// 删除操作
-Del(ctx, key)
-DelStore(ctx, key, sqlTask)
-DelDelayStore(ctx, key, sqlTask)
+| 方法 | 说明 |
+|------|------|
+| `CacheAndStore` | 缓存 + 立即写 DB（强一致） |
+| `CacheAndDelayStore` | 缓存 + 延迟写 DB（高吞吐） |
+| `Get` | 读取（L1 → L2 → DB） |
+| `Del` / `DelStore` | 删除缓存 / 删除并写 DB |
+| `NextID` | 生成分布式 ID |
+| `DBHit` | 布隆过滤器快速判断 |
 
-// 更新操作
-Update(ctx, key, value)
-UpdateStore(ctx, key, value, sqlTask)
+## 配置示例
 
-// 查询
-Get(ctx, key)
-
-// 工具方法
-NextID(ctx, prefix)
-DBHit(ctx, key)
-SQLExec(ctx, sqlTask)
-
-### 配置
-
+```yaml
 postgres_dsn: "postgresql://user:pass@localhost/zmsg"
 redis_addr: "localhost:6379"
-queue_addr: "localhost:6380"
 
-l1_max_cost: 1000000
+l1_max_cost: 104857600  # 100MB
 default_ttl: 24h
 
 batch_size: 1000
 batch_interval: 5s
+```
 
-id_prefix: "feed"
-metrics_enabled: true
-
----
-
-这个完整的项目包含了：
-
-1. **完整的目录结构** - 符合 Go 项目标准
-2. **所有接口定义** - 支持你提到的 10 个核心能力
-3. **默认实现** - 每个文件都有完整的实现
-4. **完整的测试** - 包括单元测试和集成测试
-5. **可编译运行** - 包含 Makefile、Docker 配置
-6. **使用示例** - cmd/example/main.go 展示所有功能
-
-要运行这个项目：
-
-```bash
-# 启动依赖服务
-docker-compose up -d
-
-# 运行测试
-make test
-
-# 运行示例
-make run
-
-# 清理
-make clean
-所有代码都可以直接复制到你的项目中，只需要调整包名和数据库配置即可运行。
+## 架构
 
 ```
+┌─────────────────────────────────────────────────────────┐
+│                      Application                        │
+└──────────────────────────┬──────────────────────────────┘
+                           │
+┌──────────────────────────▼──────────────────────────────┐
+│                        zmsg                             │
+│  ┌─────────┐  ┌─────────┐  ┌─────────┐  ┌───────────┐  │
+│  │ L1 Cache│→ │ L2 Cache│→ │  Bloom  │→ │ PostgreSQL│  │
+│  │ (Local) │  │ (Redis) │  │ Filter  │  │           │  │
+│  └─────────┘  └─────────┘  └─────────┘  └───────────┘  │
+│                    │                                    │
+│              ┌─────▼─────┐                              │
+│              │   Queue   │  ← 延迟写入                  │
+│              │  (Redis)  │  ← 批量聚合                  │
+│              └───────────┘                              │
+└─────────────────────────────────────────────────────────┘
+```
+
+## 运行示例
+
+```bash
+# 启动依赖
+docker-compose up -d
+
+# 运行
+go run cmd/main.go
+```
+
+## License
+
+MIT

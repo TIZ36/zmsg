@@ -1,0 +1,70 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" width="900" height="500" viewBox="0 0 900 500">
+<style>
+  .title { font: bold 18px sans-serif; fill: #333; }
+  .subtitle { font: 12px sans-serif; fill: #666; }
+  .axis-label { font: 11px sans-serif; fill: #666; }
+  .bar-label { font: 10px sans-serif; fill: #333; }
+  .value-label { font: 10px sans-serif; fill: #fff; }
+  .grid { stroke: #eee; stroke-width: 1; }
+  .bar { fill: #4CAF50; }
+  .bar:hover { fill: #45a049; }
+  .bar-parallel { fill: #2196F3; }
+  .bar-parallel:hover { fill: #1976D2; }
+</style>
+<rect width="100%" height="100%" fill="#fafafa"/>
+<text x="450" y="30" class="title" text-anchor="middle">zmsg Benchmark Results</text>
+<text x="450" y="48" class="subtitle" text-anchor="middle">Generated: 2026-01-23 15:25:48</text>
+<line x1="120" y1="350" x2="850" y2="350" class="grid"/>
+<text x="110" y="354" class="axis-label" text-anchor="end">0ns</text>
+<line x1="120" y1="292" x2="850" y2="292" class="grid"/>
+<text x="110" y="296" class="axis-label" text-anchor="end">62.75µs</text>
+<line x1="120" y1="234" x2="850" y2="234" class="grid"/>
+<text x="110" y="238" class="axis-label" text-anchor="end">125.49µs</text>
+<line x1="120" y1="176" x2="850" y2="176" class="grid"/>
+<text x="110" y="180" class="axis-label" text-anchor="end">188.24µs</text>
+<line x1="120" y1="118" x2="850" y2="118" class="grid"/>
+<text x="110" y="122" class="axis-label" text-anchor="end">250.98µs</text>
+<line x1="120" y1="60" x2="850" y2="60" class="grid"/>
+<text x="110" y="64" class="axis-label" text-anchor="end">313.73µs</text>
+<rect x="130" y="350" width="22" height="0" class="bar" rx="2"/>
+<text x="141" y="360" class="bar-label" text-anchor="start" transform="rotate(45 141 360)">SQL_Builder/SQL_Basic</text>
+<rect x="172" y="350" width="22" height="0" class="bar" rx="2"/>
+<text x="183" y="360" class="bar-label" text-anchor="start" transform="rotate(45 183 360)">SQL_Builder/SQL_OnConflict</text>
+<rect x="214" y="350" width="22" height="0" class="bar" rx="2"/>
+<text x="225" y="360" class="bar-label" text-anchor="start" transform="rotate(45 225 360)">SQL_Builder/Counter_Inc</text>
+<rect x="256" y="350" width="22" height="0" class="bar" rx="2"/>
+<text x="267" y="360" class="bar-label" text-anchor="start" transform="rotate(45 267 360)">SQL_Builder/Table_Column_Counter</text>
+<rect x="298" y="350" width="22" height="0" class="bar" rx="2"/>
+<text x="309" y="360" class="bar-label" text-anchor="start" transform="rotate(45 309 360)">SQL_Builder/Slice_Add</text>
+<rect x="340" y="350" width="22" height="0" class="bar" rx="2"/>
+<text x="351" y="360" class="bar-label" text-anchor="start" transform="rotate(45 351 360)">SQL_Builder/Map_Set</text>
+<rect x="382" y="67" width="22" height="283" class="bar" rx="2"/>
+<text x="393" y="82" class="value-label" text-anchor="middle">306.86µs</text>
+<text x="393" y="360" class="bar-label" text-anchor="start" transform="rotate(45 393 360)">CacheOnly</text>
+<rect x="424" y="295" width="22" height="55" class="bar-parallel" rx="2"/>
+<text x="435" y="310" class="value-label" text-anchor="middle">60.54µs</text>
+<text x="435" y="360" class="bar-label" text-anchor="start" transform="rotate(45 435 360)">CacheOnly_Parallel</text>
+<rect x="466" y="350" width="22" height="0" class="bar" rx="2"/>
+<text x="477" y="360" class="bar-label" text-anchor="start" transform="rotate(45 477 360)">Get</text>
+<rect x="508" y="350" width="22" height="0" class="bar-parallel" rx="2"/>
+<text x="519" y="360" class="bar-label" text-anchor="start" transform="rotate(45 519 360)">Get_Parallel</text>
+<rect x="550" y="350" width="22" height="0" class="bar" rx="2"/>
+<text x="561" y="360" class="bar-label" text-anchor="start" transform="rotate(45 561 360)">NextID</text>
+<rect x="592" y="350" width="22" height="0" class="bar-parallel" rx="2"/>
+<text x="603" y="360" class="bar-label" text-anchor="start" transform="rotate(45 603 360)">NextID_Parallel</text>
+<rect x="634" y="60" width="22" height="290" class="bar" rx="2"/>
+<text x="645" y="75" class="value-label" text-anchor="middle">313.73µs</text>
+<text x="645" y="360" class="bar-label" text-anchor="start" transform="rotate(45 645 360)">CacheAndPeriodicStore</text>
+<rect x="676" y="294" width="22" height="56" class="bar-parallel" rx="2"/>
+<text x="687" y="309" class="value-label" text-anchor="middle">60.85µs</text>
+<text x="687" y="360" class="bar-label" text-anchor="start" transform="rotate(45 687 360)">CacheAndPeriodicStore_Parallel</text>
+<rect x="718" y="350" width="22" height="0" class="bar" rx="2"/>
+<text x="729" y="360" class="bar-label" text-anchor="start" transform="rotate(45 729 360)">JSON_Marshal</text>
+<rect x="760" y="349" width="22" height="1" class="bar" rx="2"/>
+<text x="771" y="360" class="bar-label" text-anchor="start" transform="rotate(45 771 360)">JSON_Unmarshal</text>
+<rect x="120" y="468" width="15" height="15" class="bar"/>
+<text x="140" y="480" class="axis-label">Sequential</text>
+<rect x="240" y="468" width="15" height="15" class="bar-parallel"/>
+<text x="260" y="480" class="axis-label">Parallel</text>
+</svg>

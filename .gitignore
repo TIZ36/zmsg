@@ -54,7 +54,7 @@ benchcompare
 benchplot
 
 # Benchmark reports (generated)
-tests/reports/bench*
+# tests/reports/bench*
 
 # Debug
 debug/

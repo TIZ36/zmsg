@@ -1,0 +1,68 @@
+asynq: pid=67548 2026/01/23 07:24:37.972321 INFO: Starting processing
+asynq: pid=67548 2026/01/23 07:24:45.541869 INFO: Starting processing
+asynq: pid=67548 2026/01/23 07:24:45.549606 INFO: Starting graceful shutdown
+asynq: pid=67548 2026/01/23 07:24:46.687697 INFO: Waiting for all workers to finish...
+asynq: pid=67548 2026/01/23 07:24:46.687742 INFO: All workers have finished
+asynq: pid=67548 2026/01/23 07:24:46.692859 INFO: Exiting
+asynq: pid=67548 2026/01/23 07:24:46.735763 INFO: Starting processing
+asynq: pid=67548 2026/01/23 07:24:46.739879 INFO: Starting graceful shutdown
+asynq: pid=67548 2026/01/23 07:24:47.863206 INFO: Waiting for all workers to finish...
+asynq: pid=67548 2026/01/23 07:24:47.866447 INFO: All workers have finished
+asynq: pid=67548 2026/01/23 07:24:47.875507 INFO: Exiting
+asynq: pid=67548 2026/01/23 07:24:47.956640 INFO: Starting processing
+asynq: pid=67548 2026/01/23 07:24:47.957521 INFO: Starting graceful shutdown
+asynq: pid=67548 2026/01/23 07:24:49.219810 INFO: Waiting for all workers to finish...
+asynq: pid=67548 2026/01/23 07:24:49.219885 INFO: All workers have finished
+asynq: pid=67548 2026/01/23 07:24:49.227160 INFO: Exiting
+asynq: pid=67548 2026/01/23 07:24:49.272078 INFO: Starting processing
+asynq: pid=67548 2026/01/23 07:24:55.290028 INFO: Starting graceful shutdown
+asynq: pid=67548 2026/01/23 07:24:55.674773 INFO: Waiting for all workers to finish...
+asynq: pid=67548 2026/01/23 07:24:55.674816 INFO: All workers have finished
+asynq: pid=67548 2026/01/23 07:24:55.677984 INFO: Exiting
+asynq: pid=67548 2026/01/23 07:24:55.725568 INFO: Starting processing
+asynq: pid=67548 2026/01/23 07:24:55.734287 INFO: Starting graceful shutdown
+asynq: pid=67548 2026/01/23 07:24:56.508556 INFO: Waiting for all workers to finish...
+asynq: pid=67548 2026/01/23 07:24:56.508585 INFO: All workers have finished
+asynq: pid=67548 2026/01/23 07:24:56.514269 INFO: Exiting
+asynq: pid=67548 2026/01/23 07:24:56.551716 INFO: Starting processing
+asynq: pid=67548 2026/01/23 07:24:56.555093 INFO: Starting graceful shutdown
+asynq: pid=67548 2026/01/23 07:24:57.937223 INFO: Waiting for all workers to finish...
+asynq: pid=67548 2026/01/23 07:24:57.937258 INFO: All workers have finished
+asynq: pid=67548 2026/01/23 07:24:57.941933 INFO: Exiting
+asynq: pid=67548 2026/01/23 07:24:57.975174 INFO: Starting processing
+asynq: pid=67548 2026/01/23 07:24:57.981521 INFO: Starting graceful shutdown
+asynq: pid=67548 2026/01/23 07:24:58.841481 INFO: Waiting for all workers to finish...
+asynq: pid=67548 2026/01/23 07:24:58.841517 INFO: All workers have finished
+asynq: pid=67548 2026/01/23 07:24:58.847312 INFO: Exiting
+asynq: pid=67548 2026/01/23 07:24:58.895622 INFO: Starting processing
+asynq: pid=67548 2026/01/23 07:24:58.904796 INFO: Starting graceful shutdown
+asynq: pid=67548 2026/01/23 07:24:59.800680 INFO: Waiting for all workers to finish...
+asynq: pid=67548 2026/01/23 07:24:59.800729 INFO: All workers have finished
+asynq: pid=67548 2026/01/23 07:24:59.819539 INFO: Exiting
+asynq: pid=67548 2026/01/23 07:24:59.849766 INFO: Starting processing
+asynq: pid=67548 2026/01/23 07:24:59.933195 INFO: Starting graceful shutdown
+asynq: pid=67548 2026/01/23 07:25:01.086524 INFO: Waiting for all workers to finish...
+asynq: pid=67548 2026/01/23 07:25:01.086547 INFO: All workers have finished
+asynq: pid=67548 2026/01/23 07:25:01.090475 INFO: Exiting
+goos: darwin
+goarch: arm64
+pkg: github.com/tiz36/zmsg/tests
+cpu: Apple M3 Pro
+BenchmarkSQL_Builder/SQL_Basic-11             	11574622	       178.9 ns/op	     128 B/op	       6 allocs/op
+BenchmarkSQL_Builder/SQL_OnConflict-11        	 6534084	       336.2 ns/op	     384 B/op	      12 allocs/op
+BenchmarkSQL_Builder/Counter_Inc-11           	 7676713	       286.5 ns/op	     480 B/op	      11 allocs/op
+BenchmarkSQL_Builder/Table_Column_Counter-11  	 7735356	       288.1 ns/op	     480 B/op	      11 allocs/op
+BenchmarkSQL_Builder/Slice_Add-11             	 4431765	       463.3 ns/op	     760 B/op	      17 allocs/op
+BenchmarkSQL_Builder/Map_Set-11               	 4931202	       480.6 ns/op	     848 B/op	      17 allocs/op
+BenchmarkCacheOnly-11                         	    7321	    306859 ns/op	    1016 B/op	      30 allocs/op
+BenchmarkCacheOnly_Parallel-11                	   38653	     60539 ns/op	     970 B/op	      29 allocs/op
+BenchmarkGet-11                               	 6642056	       351.4 ns/op	     248 B/op	       9 allocs/op
+BenchmarkGet_Parallel-11                      	14268705	       166.5 ns/op	     240 B/op	       9 allocs/op
+BenchmarkNextID-11                            	 9505671	       267.8 ns/op	      88 B/op	       5 allocs/op
+BenchmarkNextID_Parallel-11                   	 6235382	       388.5 ns/op	      88 B/op	       5 allocs/op
+BenchmarkCacheAndPeriodicStore-11             	    7675	    313729 ns/op	    2280 B/op	      51 allocs/op
+BenchmarkCacheAndPeriodicStore_Parallel-11    	   36577	     60852 ns/op	    2309 B/op	      52 allocs/op
+BenchmarkJSON_Marshal-11                      	 3874126	       590.9 ns/op	     528 B/op	      12 allocs/op
+BenchmarkJSON_Unmarshal-11                    	 1717972	      1365 ns/op	     656 B/op	      32 allocs/op
+PASS
+ok  	github.com/tiz36/zmsg/tests	69.873s

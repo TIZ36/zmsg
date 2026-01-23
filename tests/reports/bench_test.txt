@@ -1,0 +1,63 @@
+asynq: pid=64309 2026/01/23 07:23:06.715406 INFO: Starting processing
+asynq: pid=64309 2026/01/23 07:23:13.934721 INFO: Starting processing
+asynq: pid=64309 2026/01/23 07:23:13.943182 INFO: Starting graceful shutdown
+asynq: pid=64309 2026/01/23 07:23:14.870619 INFO: Waiting for all workers to finish...
+asynq: pid=64309 2026/01/23 07:23:14.870656 INFO: All workers have finished
+asynq: pid=64309 2026/01/23 07:23:14.875524 INFO: Exiting
+asynq: pid=64309 2026/01/23 07:23:14.924007 INFO: Starting processing
+asynq: pid=64309 2026/01/23 07:23:14.930623 INFO: Starting graceful shutdown
+asynq: pid=64309 2026/01/23 07:23:15.593554 INFO: Waiting for all workers to finish...
+asynq: pid=64309 2026/01/23 07:23:15.593636 INFO: All workers have finished
+asynq: pid=64309 2026/01/23 07:23:15.604910 INFO: Exiting
+asynq: pid=64309 2026/01/23 07:23:15.651407 INFO: Starting processing
+asynq: pid=64309 2026/01/23 07:23:15.653865 INFO: Starting graceful shutdown
+asynq: pid=64309 2026/01/23 07:23:16.841088 INFO: Waiting for all workers to finish...
+asynq: pid=64309 2026/01/23 07:23:16.841142 INFO: All workers have finished
+asynq: pid=64309 2026/01/23 07:23:16.844704 INFO: Exiting
+asynq: pid=64309 2026/01/23 07:23:16.881901 INFO: Starting processing
+asynq: pid=64309 2026/01/23 07:23:22.896745 INFO: Starting graceful shutdown
+asynq: pid=64309 2026/01/23 07:23:23.364943 INFO: Waiting for all workers to finish...
+asynq: pid=64309 2026/01/23 07:23:23.364983 INFO: All workers have finished
+asynq: pid=64309 2026/01/23 07:23:23.368939 INFO: Exiting
+asynq: pid=64309 2026/01/23 07:23:23.421544 INFO: Starting processing
+asynq: pid=64309 2026/01/23 07:23:23.434296 INFO: Starting graceful shutdown
+asynq: pid=64309 2026/01/23 07:23:24.825439 INFO: Waiting for all workers to finish...
+asynq: pid=64309 2026/01/23 07:23:24.825478 INFO: All workers have finished
+asynq: pid=64309 2026/01/23 07:23:24.830094 INFO: Exiting
+asynq: pid=64309 2026/01/23 07:23:24.882748 INFO: Starting processing
+asynq: pid=64309 2026/01/23 07:23:24.887888 INFO: Starting graceful shutdown
+asynq: pid=64309 2026/01/23 07:23:25.634822 INFO: Waiting for all workers to finish...
+asynq: pid=64309 2026/01/23 07:23:25.634859 INFO: All workers have finished
+asynq: pid=64309 2026/01/23 07:23:25.638984 INFO: Exiting
+asynq: pid=64309 2026/01/23 07:23:25.684826 INFO: Starting processing
+asynq: pid=64309 2026/01/23 07:23:25.692588 INFO: Starting graceful shutdown
+asynq: pid=64309 2026/01/23 07:23:26.610252 INFO: Waiting for all workers to finish...
+asynq: pid=64309 2026/01/23 07:23:26.610293 INFO: All workers have finished
+asynq: pid=64309 2026/01/23 07:23:26.617012 INFO: Exiting
+asynq: pid=64309 2026/01/23 07:23:26.661434 INFO: Starting processing
+asynq: pid=64309 2026/01/23 07:23:26.672431 INFO: Starting graceful shutdown
+asynq: pid=64309 2026/01/23 07:23:27.452510 INFO: Waiting for all workers to finish...
+asynq: pid=64309 2026/01/23 07:23:27.452532 INFO: All workers have finished
+asynq: pid=64309 2026/01/23 07:23:27.457991 INFO: Exiting
+asynq: pid=64309 2026/01/23 07:23:27.494990 INFO: Starting processing
+asynq: pid=64309 2026/01/23 07:23:27.579728 INFO: Starting graceful shutdown
+asynq: pid=64309 2026/01/23 07:23:28.173845 INFO: Waiting for all workers to finish...
+asynq: pid=64309 2026/01/23 07:23:28.173915 INFO: All workers have finished
+asynq: pid=64309 2026/01/23 07:23:28.178365 INFO: Exiting
+goos: darwin
+goarch: arm64
+pkg: github.com/tiz36/zmsg/tests
+cpu: Apple M3 Pro
+BenchmarkSQL_Builder/SQL_Basic-11         	 6604696	       182.3 ns/op	     128 B/op	       6 allocs/op
+BenchmarkSQL_Builder/SQL_OnConflict-11    	 3245436	       336.9 ns/op	     384 B/op	      12 allocs/op
+BenchmarkSQL_Builder/Counter_Inc-11       	 3784430	       296.0 ns/op	     480 B/op	      11 allocs/op
+BenchmarkSQL_Builder/Table_Column_Counter-11         	 3900384	       316.4 ns/op	     481 B/op	      11 allocs/op
+BenchmarkSQL_Builder/Slice_Add-11                    	 2468662	       472.8 ns/op	     760 B/op	      17 allocs/op
+BenchmarkSQL_Builder/Map_Set-11                      	 2421924	       473.1 ns/op	     848 B/op	      17 allocs/op
+BenchmarkJSON_Marshal-11                             	 1887334	       605.1 ns/op	     528 B/op	      12 allocs/op
+BenchmarkJSON_Unmarshal-11                           	  900573	      1392 ns/op	     656 B/op	      32 allocs/op
+PASS
+ok  	github.com/tiz36/zmsg/tests	37.493s
+?   	github.com/tiz36/zmsg/tests/testutil	[no test files]
+?   	github.com/tiz36/zmsg/tests/tools/benchcompare	[no test files]
+?   	github.com/tiz36/zmsg/tests/tools/benchplot	[no test files]

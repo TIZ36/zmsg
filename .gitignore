@@ -49,6 +49,13 @@ temp/
 # Demo / Examples (use cases)
 cmd/
 
+# Benchmark tools binary
+benchcompare
+benchplot
+
+# Benchmark reports (generated)
+tests/reports/
+
 # Debug
 debug/
 *.prof

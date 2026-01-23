@@ -1,4 +1,4 @@
-package zmsg_test
+package test
 
 import (
 	"context"
@@ -6,16 +6,17 @@ import (
 	"testing"
 	"time"
 
+	"github.com/tiz36/zmsg/tests/testutil"
 	"github.com/tiz36/zmsg/zmsg"
 )
+
+func init() { testutil.InitEnv() }
 
 // BenchmarkCacheOnly 缓存性能测试
 func BenchmarkCacheOnly(b *testing.B) {
 	ctx := context.Background()
 
-	cfg := zmsg.DefaultConfig()
-	cfg.PostgresDSN = "postgresql://test:test@localhost/test?sslmode=disable"
-	cfg.RedisAddr = "localhost:6379"
+	cfg := testutil.NewConfig()
 
 	zm, err := zmsg.New(ctx, cfg)
 	if err != nil {
@@ -40,9 +41,7 @@ func BenchmarkCacheOnly(b *testing.B) {
 func BenchmarkGet(b *testing.B) {
 	ctx := context.Background()
 
-	cfg := zmsg.DefaultConfig()
-	cfg.PostgresDSN = "postgresql://test:test@localhost/test?sslmode=disable"
-	cfg.RedisAddr = "localhost:6379"
+	cfg := testutil.NewConfig()
 
 	zm, err := zmsg.New(ctx, cfg)
 	if err != nil {
@@ -76,9 +75,7 @@ func BenchmarkGet(b *testing.B) {
 func BenchmarkNextID(b *testing.B) {
 	ctx := context.Background()
 
-	cfg := zmsg.DefaultConfig()
-	cfg.PostgresDSN = "postgresql://test:test@localhost/test?sslmode=disable"
-	cfg.RedisAddr = "localhost:6379"
+	cfg := testutil.NewConfig()
 
 	zm, err := zmsg.New(ctx, cfg)
 	if err != nil {
@@ -100,9 +97,7 @@ func BenchmarkNextID(b *testing.B) {
 func BenchmarkCacheAndStore(b *testing.B) {
 	ctx := context.Background()
 
-	cfg := zmsg.DefaultConfig()
-	cfg.PostgresDSN = "postgresql://test:test@localhost/test?sslmode=disable"
-	cfg.RedisAddr = "localhost:6379"
+	cfg := testutil.NewConfig()
 
 	zm, err := zmsg.New(ctx, cfg)
 	if err != nil {
@@ -144,9 +139,7 @@ func BenchmarkCacheAndStore(b *testing.B) {
 func BenchmarkConcurrentOperations(b *testing.B) {
 	ctx := context.Background()
 
-	cfg := zmsg.DefaultConfig()
-	cfg.PostgresDSN = "postgresql://test:test@localhost/test?sslmode=disable"
-	cfg.RedisAddr = "localhost:6379"
+	cfg := testutil.NewConfig()
 
 	zm, err := zmsg.New(ctx, cfg)
 	if err != nil {
@@ -199,9 +192,7 @@ func BenchmarkConcurrentOperations(b *testing.B) {
 func BenchmarkBatchCounter(b *testing.B) {
 	ctx := context.Background()
 
-	cfg := zmsg.DefaultConfig()
-	cfg.PostgresDSN = "postgresql://test:test@localhost/test?sslmode=disable"
-	cfg.RedisAddr = "localhost:6379"
+	cfg := testutil.NewConfig()
 
 	zm, err := zmsg.New(ctx, cfg)
 	if err != nil {
@@ -232,7 +223,6 @@ func BenchmarkBatchCounter(b *testing.B) {
 		sqlTask := &zmsg.SQLTask{
 			Query:    "INSERT INTO benchmark_likes (feed_id, user_id) VALUES ($1, $2) ON CONFLICT DO NOTHING",
 			Params:   []interface{}{feedID, userID},
-			TaskType: zmsg.TaskTypeCount,
 			BatchKey: fmt.Sprintf("like_count:%s", feedID),
 		}
 

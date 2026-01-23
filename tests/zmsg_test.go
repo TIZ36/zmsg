@@ -1,4 +1,4 @@
-package zmsg_test
+package test
 
 import (
 	"context"
@@ -9,8 +9,11 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"github.com/stretchr/testify/suite"
+	"github.com/tiz36/zmsg/tests/testutil"
 	"github.com/tiz36/zmsg/zmsg"
 )
+
+func init() { testutil.InitEnv() }
 
 // ZMsgTestSuite 测试套件
 type ZMsgTestSuite struct {
@@ -23,11 +26,9 @@ type ZMsgTestSuite struct {
 func (s *ZMsgTestSuite) SetupSuite() {
 	s.ctx = context.Background()
 
-	cfg := zmsg.DefaultConfig()
-	cfg.PostgresDSN = "postgresql://test:test@localhost/test?sslmode=disable"
-	cfg.RedisAddr = "localhost:6379"
-	cfg.QueueAddr = "localhost:6380"
-	cfg.BatchSize = 10 // 测试用小批量
+	cfg := testutil.NewConfig()
+	cfg.Queue.Addr = "localhost:6380"
+	cfg.Batch.Size = 10 // 测试用小批量
 
 	var err error
 	s.zm, err = zmsg.New(s.ctx, cfg)

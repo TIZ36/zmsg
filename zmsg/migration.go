@@ -201,8 +201,8 @@ func parseSQLStatements(content string) []string {
 
 		// 处理分号
 		if c == ';' && !inString {
-			stmt := strings.TrimSpace(current.String())
-			if stmt != "" && !isComment(stmt) {
+			stmt := cleanStatement(current.String())
+			if stmt != "" {
 				statements = append(statements, stmt)
 			}
 			current.Reset()
@@ -213,18 +213,33 @@ func parseSQLStatements(content string) []string {
 	}
 
 	// 处理最后一条语句（可能没有分号）
-	stmt := strings.TrimSpace(current.String())
-	if stmt != "" && !isComment(stmt) {
+	stmt := cleanStatement(current.String())
+	if stmt != "" {
 		statements = append(statements, stmt)
 	}
 
 	return statements
 }
 
-// isComment 检查是否是注释
-func isComment(s string) bool {
-	s = strings.TrimSpace(s)
-	return strings.HasPrefix(s, "--") || strings.HasPrefix(s, "/*")
+// cleanStatement 清理语句：移除注释行，返回纯 SQL
+func cleanStatement(s string) string {
+	lines := strings.Split(s, "\n")
+	var cleaned []string
+
+	for _, line := range lines {
+		trimmed := strings.TrimSpace(line)
+		// 跳过空行和单行注释
+		if trimmed == "" || strings.HasPrefix(trimmed, "--") {
+			continue
+		}
+		// 移除行内注释
+		if idx := strings.Index(line, "--"); idx > 0 {
+			line = line[:idx]
+		}
+		cleaned = append(cleaned, line)
+	}
+
+	return strings.TrimSpace(strings.Join(cleaned, "\n"))
 }
 
 // truncateSQL 截断 SQL 用于错误显示

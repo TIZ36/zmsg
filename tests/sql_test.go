@@ -1,4 +1,4 @@
-package zmsg_test
+package test
 
 import (
 	"context"
@@ -9,16 +9,17 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"github.com/tiz36/zmsg/tests/testutil"
 	"github.com/tiz36/zmsg/zmsg"
 )
+
+func init() { testutil.InitEnv() }
 
 // TestSQLExecutor 测试SQL执行器
 func TestSQLExecutor(t *testing.T) {
 	ctx := context.Background()
 
-	cfg := zmsg.DefaultConfig()
-	cfg.PostgresDSN = "postgresql://test:test@localhost/test?sslmode=disable"
-	cfg.RedisAddr = "localhost:6379"
+	cfg := testutil.NewConfig()
 
 	zm, err := zmsg.New(ctx, cfg)
 	require.NoError(t, err)

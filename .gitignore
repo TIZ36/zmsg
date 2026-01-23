@@ -5,7 +5,6 @@
 *.so
 *.dylib
 zmsg
-cmd/zmsg
 
 # Test binary
 *.test
@@ -36,8 +35,7 @@ Thumbs.db
 bin/
 dist/
 
-# Local config (keep config.yaml.example)
-cmd/config.local.yaml
+# Local config
 *.local.yaml
 
 # Logs
@@ -47,3 +45,11 @@ logs/
 # Temp
 tmp/
 temp/
+
+# Demo / Examples (use cases)
+cmd/
+
+# Debug
+debug/
+*.prof
+*.pprof

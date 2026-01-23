@@ -1,4 +1,4 @@
-package zmsg_test
+package test
 
 import (
 	"context"
@@ -10,8 +10,11 @@ import (
 	"github.com/stretchr/testify/require"
 	"github.com/testcontainers/testcontainers-go"
 	"github.com/testcontainers/testcontainers-go/wait"
+	"github.com/tiz36/zmsg/tests/testutil"
 	"github.com/tiz36/zmsg/zmsg"
 )
+
+func init() { testutil.InitEnv() }
 
 // TestIntegration 集成测试
 func TestIntegration(t *testing.T) {
@@ -74,10 +77,10 @@ func TestIntegration(t *testing.T) {
 	time.Sleep(5 * time.Second)
 
 	// 创建zmsg实例
-	cfg := zmsg.DefaultConfig()
-	cfg.PostgresDSN = pgDSN
-	cfg.RedisAddr = redisAddr
-	cfg.QueueAddr = redisAddr // 测试使用同一个Redis
+	cfg := testutil.NewConfig()
+	cfg.Postgres.DSN = pgDSN
+	cfg.Redis.Addr = redisAddr
+	cfg.Queue.Addr = redisAddr // 测试使用同一个Redis
 
 	zm, err := zmsg.New(ctx, cfg)
 	require.NoError(t, err)

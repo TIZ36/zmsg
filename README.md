@@ -52,19 +52,69 @@ func main() {
 
 ## SQL 构建
 
-支持两种方式，按场景选择：
+### 原生 SQL（支持链式调用）
 
 ```go
-// 方式一：原生 SQL（简单场景）
+// 基础用法
 task := zmsg.SQL("UPDATE feeds SET content = ? WHERE id = ?", content, id)
 
-// 方式二：Builder（复杂场景）
-task := zmsg.NewBuilder().
-    Insert("feeds", map[string]interface{}{"id": id, "content": content}).
+// 链式调用（PostgreSQL 特性）
+task := zmsg.SQL("INSERT INTO feeds (id, content) VALUES (?, ?)", id, content).
     OnConflict("id").
-    DoUpdate("content").
+    DoUpdate("content", "status")
+
+task := zmsg.SQL("INSERT INTO feeds (id, content) VALUES (?, ?)", id, content).
+    OnConflict("id").
+    DoNothing()
+
+task := zmsg.SQL("INSERT INTO feeds (id) VALUES (?)", id).
+    OnConflict("id").
+    DoNothing().
+    Returning("id", "created_at")
+```
+
+### 语法糖（内存聚合 + 批量写入）
+
+推荐使用链式调用风格，语义清晰：
+
+```go
+// Counter 计数器（推荐写法）
+task := zmsg.Table("feed_reply_meta").Column("like_count").Counter().
+    Inc(1).
+    Where("id = ?", feedID).
+    BatchKey("meta:" + feedID).
+    Build()
+
+// Slice 数组（JSONB）
+task := zmsg.Table("feed_reply_meta").Column("tags").Slice().
+    Add("tag1").
+    Where("id = ?", feedID).
+    BatchKey("meta:" + feedID).
+    Build()
+
+// Map 对象（JSONB）
+task := zmsg.Table("feed_reply_meta").Column("extra").Map().
+    Set("key", "val").
+    Where("id = ?", feedID).
+    BatchKey("meta:" + feedID).
     Build()
 ```
+
+也支持简约写法：
+
+```go
+zmsg.Counter("feed_meta", "like_count").Inc(1).Where("id = ?", feedID).BatchKey("meta:"+feedID).Build()
+zmsg.Slice("feed_meta", "tags").Add("tag1").Where("id = ?", feedID).BatchKey("meta:"+feedID).Build()
+zmsg.Map("feed_meta", "extra").Set("k", "v").Where("id = ?", feedID).BatchKey("meta:"+feedID).Build()
+```
+
+支持的操作：
+
+| 类型 | 操作 | 说明 |
+|------|------|------|
+| Counter | `Inc(n)` / `Dec(n)` / `Mul(n)` / `Set(n)` / `Clean()` | 计数器增减/乘/设置/清零 |
+| Slice | `Add(val)` / `Del(val)` / `Clean()` | 数组追加/删除/清空 |
+| Map | `Set(k, v)` / `Del(k)` | 对象设置/删除键 |
 
 ## 核心 API
 

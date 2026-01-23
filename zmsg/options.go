@@ -37,6 +37,13 @@ func WithTags(tags ...string) Option {
 	}
 }
 
+// WithAsyncDelay 设置 asynq 任务延迟时间
+func WithAsyncDelay(delay time.Duration) Option {
+	return func(o *Options) {
+		o.AsyncDelay = delay
+	}
+}
+
 // buildOptions 构建选项
 func buildOptions(opts ...Option) Options {
 	o := Options{
@@ -44,6 +51,7 @@ func buildOptions(opts ...Option) Options {
 		Consistency: ConsistencyEventual,
 		SyncPersist: false,
 		Priority:    0,
+		AsyncDelay:  0, // 默认立即执行
 	}
 	for _, opt := range opts {
 		opt(&o)

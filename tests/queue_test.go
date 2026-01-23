@@ -1,4 +1,4 @@
-package zmsg_test
+package test
 
 import (
 	"context"
@@ -9,17 +9,18 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"github.com/tiz36/zmsg/tests/testutil"
 	"github.com/tiz36/zmsg/zmsg"
 )
+
+func init() { testutil.InitEnv() }
 
 // TestAsyncQueue 测试异步队列
 func TestAsyncQueue(t *testing.T) {
 	ctx := context.Background()
 
-	cfg := zmsg.DefaultConfig()
-	cfg.PostgresDSN = "postgresql://test:test@localhost/test?sslmode=disable"
-	cfg.RedisAddr = "localhost:6379"
-	cfg.QueueAddr = "localhost:6380"
+	cfg := testutil.NewConfig()
+	cfg.Queue.Addr = "localhost:6380"
 
 	zm, err := zmsg.New(ctx, cfg)
 	require.NoError(t, err)

@@ -1,4 +1,4 @@
-package zmsg_test
+package test
 
 import (
 	"context"
@@ -7,16 +7,17 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"github.com/tiz36/zmsg/tests/testutil"
 	"github.com/tiz36/zmsg/zmsg"
 )
+
+func init() { testutil.InitEnv() }
 
 // TestIDGeneration 测试ID生成
 func TestIDGeneration(t *testing.T) {
 	ctx := context.Background()
 
-	cfg := zmsg.DefaultConfig()
-	cfg.PostgresDSN = "postgresql://test:test@localhost/test?sslmode=disable"
-	cfg.RedisAddr = "localhost:6379"
+	cfg := testutil.NewConfig()
 
 	zm, err := zmsg.New(ctx, cfg)
 	require.NoError(t, err)
@@ -122,9 +123,7 @@ func TestIDGeneration(t *testing.T) {
 
 		// 创建3个实例
 		for i := 0; i < 3; i++ {
-			instanceCfg := zmsg.DefaultConfig()
-			instanceCfg.PostgresDSN = "postgresql://test:test@localhost/test?sslmode=disable"
-			instanceCfg.RedisAddr = "localhost:6379"
+			instanceCfg := testutil.NewConfig()
 
 			instance, err := zmsg.New(ctx, instanceCfg)
 			require.NoError(t, err)

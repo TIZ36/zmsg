@@ -1,8 +1,10 @@
 package cache
 
 import (
+	"container/list"
 	"context"
 	"fmt"
+	"strings"
 	"sync"
 	"time"
 
@@ -18,8 +20,11 @@ type BloomFilter struct {
 	mu     sync.RWMutex
 
 	// 本地缓存（提高性能）
-	localCache map[string]bool
+	localCache *localCache
 	localMu    sync.RWMutex
+
+	ctx    context.Context
+	cancel context.CancelFunc
 }
 
 // BloomConfig 布隆过滤器配置
@@ -29,7 +34,16 @@ type BloomConfig struct {
 	ErrorRate        float64
 	SyncInterval     time.Duration
 	EnableLocalCache bool
+	LocalCacheMaxEntries int
+	LocalCacheTTL        time.Duration
+	DeleteStrategy       string
+	RedisTTL             time.Duration
 }
+
+const (
+	BloomDeleteLocal = "local"
+	BloomDeleteClear = "clear"
+)
 
 // NewBloomFilter 创建布隆过滤器
 func NewBloomFilter(config *BloomConfig, redisClient *redis.Client) *BloomFilter {
@@ -40,17 +54,31 @@ func NewBloomFilter(config *BloomConfig, redisClient *redis.Client) *BloomFilter
 			ErrorRate:        0.01,
 			SyncInterval:     30 * time.Second,
 			EnableLocalCache: true,
+			LocalCacheMaxEntries: 0,
+			LocalCacheTTL:        0,
+			DeleteStrategy:       BloomDeleteLocal,
+			RedisTTL:             24 * time.Hour,
 		}
 	}
 
+	if config.DeleteStrategy == "" {
+		config.DeleteStrategy = BloomDeleteLocal
+	}
+	if config.RedisTTL <= 0 {
+		config.RedisTTL = 24 * time.Hour
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
 	bf := &BloomFilter{
 		redis:  redisClient,
 		config: config,
 		filter: bloom.NewWithEstimates(config.Capacity, config.ErrorRate),
+		ctx:    ctx,
+		cancel: cancel,
 	}
 
 	if config.EnableLocalCache {
-		bf.localCache = make(map[string]bool)
+		bf.localCache = newLocalCache(config.LocalCacheMaxEntries, config.LocalCacheTTL)
 	}
 
 	// 从Redis加载布隆过滤器
@@ -61,7 +89,7 @@ func NewBloomFilter(config *BloomConfig, redisClient *redis.Client) *BloomFilter
 
 	// 启动同步协程
 	if config.SyncInterval > 0 {
-		go bf.syncLoop(context.Background())
+		go bf.syncLoop(bf.ctx)
 	}
 
 	return bf
@@ -76,7 +104,9 @@ func (b *BloomFilter) Add(ctx context.Context, key string) error {
 	// 更新本地缓存
 	if b.config.EnableLocalCache {
 		b.localMu.Lock()
-		b.localCache[key] = true
+		if b.localCache != nil {
+			b.localCache.Set(key, true)
+		}
 		b.localMu.Unlock()
 	}
 
@@ -95,7 +125,9 @@ func (b *BloomFilter) AddBatch(ctx context.Context, keys []string) error {
 	if b.config.EnableLocalCache {
 		b.localMu.Lock()
 		for _, key := range keys {
-			b.localCache[key] = true
+			if b.localCache != nil {
+				b.localCache.Set(key, true)
+			}
 		}
 		b.localMu.Unlock()
 	}
@@ -108,7 +140,10 @@ func (b *BloomFilter) Test(ctx context.Context, key string) bool {
 	// 先检查本地缓存（如果启用）
 	if b.config.EnableLocalCache {
 		b.localMu.RLock()
-		exists, found := b.localCache[key]
+		exists, found := false, false
+		if b.localCache != nil {
+			exists, found = b.localCache.Get(key)
+		}
 		b.localMu.RUnlock()
 
 		if found {
@@ -123,7 +158,9 @@ func (b *BloomFilter) Test(ctx context.Context, key string) bool {
 	// 更新本地缓存
 	if b.config.EnableLocalCache {
 		b.localMu.Lock()
-		b.localCache[key] = exists
+		if b.localCache != nil {
+			b.localCache.Set(key, exists)
+		}
 		b.localMu.Unlock()
 	}
 
@@ -143,17 +180,22 @@ func (b *BloomFilter) TestBatch(ctx context.Context, keys []string) (map[string]
 
 // Delete 删除元素（近似删除）
 func (b *BloomFilter) Delete(ctx context.Context, key string) error {
-	// 标准布隆过滤器不支持删除
-	// 这里我们实现一个计数布隆过滤器或者使用其他方法
-
-	// 简单实现：在本地缓存中标记为不存在
-	if b.config.EnableLocalCache {
-		b.localMu.Lock()
-		b.localCache[key] = false
-		b.localMu.Unlock()
+	strategy := strings.ToLower(b.config.DeleteStrategy)
+	switch strategy {
+	case BloomDeleteClear:
+		return b.Clear(ctx)
+	default:
+		// 标准布隆过滤器不支持删除
+		// 简单实现：在本地缓存中标记为不存在
+		if b.config.EnableLocalCache {
+			b.localMu.Lock()
+			if b.localCache != nil {
+				b.localCache.Set(key, false)
+			}
+			b.localMu.Unlock()
+		}
+		return nil
 	}
-
-	return nil
 }
 
 // Clear 清空布隆过滤器
@@ -167,7 +209,9 @@ func (b *BloomFilter) Clear(ctx context.Context) error {
 	// 清空本地缓存
 	if b.config.EnableLocalCache {
 		b.localMu.Lock()
-		b.localCache = make(map[string]bool)
+		if b.localCache != nil {
+			b.localCache.Clear()
+		}
 		b.localMu.Unlock()
 	}
 
@@ -202,7 +246,7 @@ func (b *BloomFilter) saveToRedis(ctx context.Context) error {
 	}
 
 	// 保存到Redis，设置过期时间（可选）
-	return b.redis.Set(ctx, b.config.Key, data, 24*time.Hour).Err()
+	return b.redis.Set(ctx, b.config.Key, data, b.config.RedisTTL).Err()
 }
 
 // syncLoop 同步循环
@@ -225,6 +269,113 @@ func (b *BloomFilter) syncLoop(ctx context.Context) {
 			}
 		}
 	}
+}
+
+// Close 停止同步并持久化
+func (b *BloomFilter) Close() {
+	if b.cancel != nil {
+		b.cancel()
+	}
+	b.saveToRedis(context.Background())
+}
+
+type localCacheEntry struct {
+	key       string
+	value     bool
+	expiresAt time.Time
+}
+
+type localCache struct {
+	maxEntries int
+	ttl        time.Duration
+	items      map[string]*list.Element
+	order      *list.List
+}
+
+func newLocalCache(maxEntries int, ttl time.Duration) *localCache {
+	return &localCache{
+		maxEntries: maxEntries,
+		ttl:        ttl,
+		items:      make(map[string]*list.Element),
+		order:      list.New(),
+	}
+}
+
+func (c *localCache) Get(key string) (bool, bool) {
+	elem, ok := c.items[key]
+	if !ok {
+		return false, false
+	}
+
+	entry := elem.Value.(*localCacheEntry)
+	if c.isExpired(entry) {
+		c.removeElement(elem)
+		return false, false
+	}
+
+	c.order.MoveToFront(elem)
+	return entry.value, true
+}
+
+func (c *localCache) Set(key string, value bool) {
+	if elem, ok := c.items[key]; ok {
+		entry := elem.Value.(*localCacheEntry)
+		entry.value = value
+		entry.expiresAt = c.expireAt()
+		c.order.MoveToFront(elem)
+		return
+	}
+
+	entry := &localCacheEntry{
+		key:       key,
+		value:     value,
+		expiresAt: c.expireAt(),
+	}
+	elem := c.order.PushFront(entry)
+	c.items[key] = elem
+	c.evictIfNeeded()
+}
+
+func (c *localCache) Clear() {
+	c.items = make(map[string]*list.Element)
+	c.order = list.New()
+}
+
+func (c *localCache) Len() int {
+	return len(c.items)
+}
+
+func (c *localCache) expireAt() time.Time {
+	if c.ttl <= 0 {
+		return time.Time{}
+	}
+	return time.Now().Add(c.ttl)
+}
+
+func (c *localCache) isExpired(entry *localCacheEntry) bool {
+	if entry.expiresAt.IsZero() {
+		return false
+	}
+	return time.Now().After(entry.expiresAt)
+}
+
+func (c *localCache) evictIfNeeded() {
+	if c.maxEntries <= 0 {
+		return
+	}
+	for len(c.items) > c.maxEntries {
+		elem := c.order.Back()
+		if elem == nil {
+			return
+		}
+		c.removeElement(elem)
+	}
+}
+
+func (c *localCache) removeElement(elem *list.Element) {
+	entry := elem.Value.(*localCacheEntry)
+	delete(c.items, entry.key)
+	c.order.Remove(elem)
 }
 
 // GetStats 获取统计信息
@@ -254,18 +405,14 @@ func (b *BloomFilter) GetStats() map[string]interface{} {
 	// 本地缓存大小
 	if b.config.EnableLocalCache {
 		b.localMu.RLock()
-		stats["local_cache_size"] = len(b.localCache)
+		if b.localCache != nil {
+			stats["local_cache_size"] = b.localCache.Len()
+		} else {
+			stats["local_cache_size"] = 0
+		}
 		b.localMu.RUnlock()
 	}
 
 	return stats
 }
 
-// Close 关闭布隆过滤器
-func (b *BloomFilter) Close() error {
-	// 保存到Redis
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-	defer cancel()
-
-	return b.saveToRedis(ctx)
-}

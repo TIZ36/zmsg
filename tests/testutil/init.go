@@ -7,6 +7,7 @@ import (
 	"os"
 	"sync"
 	"testing"
+	"time"
 
 	_ "github.com/lib/pq"
 	"github.com/tiz36/zmsg/zmsg"
@@ -55,8 +56,10 @@ func EnsureTestDatabase(t *testing.T) {
 		defer db.Close()
 
 		// 检查数据库是否存在
+		ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+		defer cancel()
 		var exists bool
-		err = db.QueryRow("SELECT EXISTS(SELECT datname FROM pg_catalog.pg_database WHERE datname = 'zmsg_test')").Scan(&exists)
+		err = db.QueryRowContext(ctx, "SELECT EXISTS(SELECT datname FROM pg_catalog.pg_database WHERE datname = 'zmsg_test')").Scan(&exists)
 		if err != nil {
 			t.Logf("Warning: cannot check database existence: %v", err)
 			return
@@ -258,7 +261,9 @@ func SkipIfNoDatabase(t *testing.T) {
 	}
 	defer db.Close()
 
-	if err := db.Ping(); err != nil {
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+	if err := db.PingContext(ctx); err != nil {
 		t.Skipf("skipping test: database not available: %v", err)
 	}
 }

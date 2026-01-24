@@ -44,14 +44,14 @@ type PeriodicTask struct {
 	BatchKey string // 用于聚合的 key（通常是 table:where_condition）
 
 	// 聚合信息
-	Table  string // 表名
-	Column string // 列名
-	Where  string // WHERE 条件（不含 WHERE 关键字）
+	Table     string        // 表名
+	Column    string        // 列名
+	Where     string        // WHERE 条件（不含 WHERE 关键字）
 	WhereArgs []interface{} // WHERE 参数
 
 	// Counter 聚合
-	OpType    OpType      // 操作类型
-	Delta     interface{} // 增量值（int64, float64）
+	OpType OpType      // 操作类型
+	Delta  interface{} // 增量值（int64, float64）
 
 	// Slice 聚合
 	SliceValue interface{} // 要追加或删除的值
@@ -79,22 +79,22 @@ type PeriodicWriter struct {
 	flushTimeout  time.Duration
 
 	// 控制
-	ctx       context.Context
-	cancel    context.CancelFunc
-	wg        sync.WaitGroup
-	flushCh   chan struct{} // flush 信号通道
-	flushing  int32         // 是否正在 flush（原子操作）
+	ctx      context.Context
+	cancel   context.CancelFunc
+	wg       sync.WaitGroup
+	flushCh  chan struct{} // flush 信号通道
+	flushing int32         // 是否正在 flush（原子操作）
 
 	stats writerStats
 }
 
 // TaskGroup 任务组（按 BatchKey 聚合）
 type TaskGroup struct {
-	BatchKey string
-	TaskType TaskType
-	Table    string
-	Column   string
-	Where    string
+	BatchKey  string
+	TaskType  TaskType
+	Table     string
+	Column    string
+	Where     string
 	WhereArgs []interface{}
 
 	// Content 类型：只保留最新的任务
@@ -118,10 +118,10 @@ type taskShard struct {
 }
 
 type writerStats struct {
-	flushTotal        int64
-	flushFailedGroups int64
+	flushTotal         int64
+	flushFailedGroups  int64
 	flushDurationNanos int64
-	lastFlushUnixNano int64
+	lastFlushUnixNano  int64
 }
 
 // CounterAggState 计数器聚合状态（用于周期写内存聚合）
@@ -209,15 +209,25 @@ func (w *PeriodicWriter) initShards() {
 func (w *PeriodicWriter) Start() {
 	w.wg.Add(1)
 	go w.flushLoop()
-	w.logger.Info("periodic writer started", 
-		"interval", w.flushInterval, 
+	w.logger.Info("periodic writer started",
+		"interval", w.flushInterval,
 		"maxQueueSize", w.maxQueueSize)
 }
 
 // Submit 提交周期任务
 func (w *PeriodicWriter) Submit(task *PeriodicTask) error {
 	if task.BatchKey == "" {
-		task.BatchKey = fmt.Sprintf("%s:%s:%s", task.Table, task.Column, task.Where)
+		// Optimization: Avoid fmt.Sprintf for BatchKey generation
+		// Format: Table:Column:Where
+		lb := len(task.Table) + len(task.Column) + len(task.Where) + 2
+		var b strings.Builder
+		b.Grow(lb)
+		b.WriteString(task.Table)
+		b.WriteByte(':')
+		b.WriteString(task.Column)
+		b.WriteByte(':')
+		b.WriteString(task.Where)
+		task.BatchKey = b.String()
 	}
 
 	shard := w.getShard(task.BatchKey)
@@ -334,7 +344,7 @@ func (w *PeriodicWriter) aggregateCounter(agg *CounterAggState, task *PeriodicTa
 		agg.OpType = OpClean
 	}
 
-	w.logger.Debug("[Batch/Counter] aggregate", 
+	w.logger.Debug("[Batch/Counter] aggregate",
 		"op", opName,
 		"inputDelta", delta,
 		"prevAggDelta", prevDelta,
@@ -347,13 +357,13 @@ func (w *PeriodicWriter) aggregateSlice(agg *SliceAggState, task *PeriodicTask) 
 	switch task.OpType {
 	case OpAdd:
 		agg.ToAdd = append(agg.ToAdd, task.SliceValue)
-		w.logger.Debug("[Batch/Slice] aggregate Add", 
+		w.logger.Debug("[Batch/Slice] aggregate Add",
 			"value", task.SliceValue,
 			"totalToAdd", len(agg.ToAdd),
 			"batchKey", task.BatchKey)
 	case OpDel:
 		agg.ToDel = append(agg.ToDel, task.SliceValue)
-		w.logger.Debug("[Batch/Slice] aggregate Del", 
+		w.logger.Debug("[Batch/Slice] aggregate Del",
 			"value", task.SliceValue,
 			"totalToDel", len(agg.ToDel),
 			"batchKey", task.BatchKey)
@@ -377,7 +387,7 @@ func (w *PeriodicWriter) aggregateMap(agg *MapAggState, task *PeriodicTask) {
 			}
 		}
 		agg.ToSet[task.MapKey] = task.MapValue
-		w.logger.Debug("[Batch/Map] aggregate Set", 
+		w.logger.Debug("[Batch/Map] aggregate Set",
 			"mapKey", task.MapKey,
 			"mapValue", task.MapValue,
 			"totalToSet", len(agg.ToSet),
@@ -386,7 +396,7 @@ func (w *PeriodicWriter) aggregateMap(agg *MapAggState, task *PeriodicTask) {
 		// 如果之前要设置这个 key，取消设置
 		delete(agg.ToSet, task.MapKey)
 		agg.ToDel = append(agg.ToDel, task.MapKey)
-		w.logger.Debug("[Batch/Map] aggregate Del", 
+		w.logger.Debug("[Batch/Map] aggregate Del",
 			"mapKey", task.MapKey,
 			"totalToDel", len(agg.ToDel),
 			"batchKey", task.BatchKey)
@@ -395,8 +405,8 @@ func (w *PeriodicWriter) aggregateMap(agg *MapAggState, task *PeriodicTask) {
 
 // flushLoop 定时 flush 循环
 // 支持两种触发机制：
-//   1. 周期触发：定时 flush
-//   2. 长度触发：队列长度达到阈值时立即 flush
+//  1. 周期触发：定时 flush
+//  2. 长度触发：队列长度达到阈值时立即 flush
 func (w *PeriodicWriter) flushLoop() {
 	defer w.wg.Done()
 
@@ -440,7 +450,7 @@ func (w *PeriodicWriter) flushAll(trigger string) {
 		return
 	}
 
-	w.logger.Debug("[Batch/Flush] START", 
+	w.logger.Debug("[Batch/Flush] START",
 		"trigger", trigger,
 		"groups", len(toFlush),
 		"taskCount", prevCount)
@@ -451,27 +461,27 @@ func (w *PeriodicWriter) flushAll(trigger string) {
 	flushed := 0
 	failed := 0
 	typeNames := []string{"Content", "Counter", "Slice", "Map"}
-	
+
 	// 每个 group 独立事务，避免一个失败导致全部失败
 	for _, group := range toFlush {
 		group.mu.Lock()
-		
+
 		typeName := "Unknown"
 		if int(group.TaskType) < len(typeNames) {
 			typeName = typeNames[group.TaskType]
 		}
-		
+
 		// 为每个 group 创建独立事务
 		tx, err := w.db.BeginTx(ctx, nil)
 		if err != nil {
-			w.logger.Error("[Batch/Flush] begin tx failed", 
-				"error", err, 
+			w.logger.Error("[Batch/Flush] begin tx failed",
+				"error", err,
 				"batchKey", group.BatchKey)
 			group.mu.Unlock()
 			failed++
 			continue
 		}
-		
+
 		var execErr error
 		switch group.TaskType {
 		case TaskTypeContent:
@@ -488,25 +498,25 @@ func (w *PeriodicWriter) flushAll(trigger string) {
 
 		if execErr != nil {
 			tx.Rollback()
-			w.logger.Error("[Batch/Flush] group failed (rollback)", 
-				"error", execErr, 
+			w.logger.Error("[Batch/Flush] group failed (rollback)",
+				"error", execErr,
 				"batchKey", group.BatchKey,
 				"type", typeName)
 			failed++
 			continue
 		}
-		
+
 		// 提交事务
 		if err := tx.Commit(); err != nil {
-			w.logger.Error("[Batch/Flush] commit failed", 
-				"error", err, 
+			w.logger.Error("[Batch/Flush] commit failed",
+				"error", err,
 				"batchKey", group.BatchKey,
 				"type", typeName)
 			failed++
 			continue
 		}
-		
-		w.logger.Debug("[Batch/Flush] group success", 
+
+		w.logger.Debug("[Batch/Flush] group success",
 			"batchKey", group.BatchKey,
 			"type", typeName,
 			"table", group.Table,
@@ -514,9 +524,9 @@ func (w *PeriodicWriter) flushAll(trigger string) {
 		flushed++
 	}
 
-	w.logger.Info("[Batch/Flush] COMPLETED", 
+	w.logger.Info("[Batch/Flush] COMPLETED",
 		"trigger", trigger,
-		"groupsFlushed", flushed, 
+		"groupsFlushed", flushed,
 		"groupsFailed", failed,
 		"totalGroups", len(toFlush),
 		"taskCount", prevCount)
@@ -558,8 +568,8 @@ func (w *PeriodicWriter) flushContent(ctx context.Context, tx *sql.Tx, group *Ta
 	if group.LatestTask == nil {
 		return nil
 	}
-	w.logger.Debug("[Batch/DB] exec Content SQL", 
-		"query", group.LatestTask.Query, 
+	w.logger.Debug("[Batch/DB] exec Content SQL",
+		"query", group.LatestTask.Query,
 		"params", group.LatestTask.Params,
 		"batchKey", group.BatchKey)
 	result, err := tx.ExecContext(ctx, group.LatestTask.Query, group.LatestTask.Params...)
@@ -620,8 +630,8 @@ func (w *PeriodicWriter) flushCounter(ctx context.Context, tx *sql.Tx, group *Ta
 		params = append(params, group.WhereArgs...)
 	}
 
-	w.logger.Debug("[Batch/DB] exec Counter SQL", 
-		"query", query, 
+	w.logger.Debug("[Batch/DB] exec Counter SQL",
+		"query", query,
 		"params", params,
 		"aggDelta", agg.Delta,
 		"batchKey", group.BatchKey)
@@ -652,9 +662,15 @@ func (w *PeriodicWriter) flushSlice(ctx context.Context, tx *sql.Tx, group *Task
 		// 删除：使用 jsonb_agg + filter
 		// column = (SELECT COALESCE(jsonb_agg(elem), '[]'::jsonb) FROM jsonb_array_elements(column) AS elem WHERE elem NOT IN ($1, $2, ...))
 		delPlaceholders := make([]string, len(agg.ToDel))
-		for i, v := range agg.ToDel {
+		for i := range agg.ToDel {
 			delPlaceholders[i] = fmt.Sprintf("$%d::jsonb", paramIdx)
-			jsonVal, _ := json.Marshal(v)
+			// Optimize: Pass raw interface{} to driver if it supports it, but pq needs string/bytes for JSONB usually.
+			// However, marshalling one by one is slow.
+			// Better: Let's assume ToDel items are simple values.
+			jsonVal, err := json.Marshal(agg.ToDel[i])
+			if err != nil {
+				return fmt.Errorf("marshal slice del item failed: %v", err)
+			}
 			params = append(params, string(jsonVal))
 			paramIdx++
 		}
@@ -665,10 +681,18 @@ func (w *PeriodicWriter) flushSlice(ctx context.Context, tx *sql.Tx, group *Task
 
 	if len(agg.ToAdd) > 0 {
 		// 追加：column = COALESCE(column, '[]'::jsonb) || $1::jsonb
-		jsonArr, _ := json.Marshal(agg.ToAdd)
+		// Optimize: Marshal the whole array once instead of individual items if we were doing individual appends,
+		// but here we are appending a whole array. The original code was correct in one marshal call:
+		// jsonArr, _ := json.Marshal(agg.ToAdd)
+		// But we can add error handling.
+		jsonArr, err := json.Marshal(agg.ToAdd)
+		if err != nil {
+			return fmt.Errorf("marshal slice add items failed: %v", err)
+		}
+
 		if len(setClauses) > 0 {
 			// 如果有删除操作，追加到删除结果上
-			setClauses[0] = strings.Replace(setClauses[0], 
+			setClauses[0] = strings.Replace(setClauses[0],
 				fmt.Sprintf("%s = ", group.Column),
 				fmt.Sprintf("%s = (", group.Column), 1) + fmt.Sprintf(") || $%d::jsonb", paramIdx)
 		} else {
@@ -692,8 +716,8 @@ func (w *PeriodicWriter) flushSlice(ctx context.Context, tx *sql.Tx, group *Task
 		params = append(params, group.WhereArgs...)
 	}
 
-	w.logger.Debug("[Batch/DB] exec Slice SQL", 
-		"query", query, 
+	w.logger.Debug("[Batch/DB] exec Slice SQL",
+		"query", query,
 		"params", params,
 		"toAddCount", len(agg.ToAdd),
 		"toDelCount", len(agg.ToDel),
@@ -738,8 +762,11 @@ func (w *PeriodicWriter) flushMap(ctx context.Context, tx *sql.Tx, group *TaskGr
 			kvPairs = append(kvPairs, fmt.Sprintf("$%d", paramIdx))
 			params = append(params, k)
 			paramIdx++
-			
-			jsonVal, _ := json.Marshal(v)
+
+			jsonVal, err := json.Marshal(v)
+			if err != nil {
+				return fmt.Errorf("marshal map set value failed: %v", err)
+			}
 			kvPairs = append(kvPairs, fmt.Sprintf("$%d::jsonb", paramIdx))
 			params = append(params, string(jsonVal))
 			paramIdx++
@@ -769,8 +796,8 @@ func (w *PeriodicWriter) flushMap(ctx context.Context, tx *sql.Tx, group *TaskGr
 		params = append(params, group.WhereArgs...)
 	}
 
-	w.logger.Debug("[Batch/DB] exec Map SQL", 
-		"query", query, 
+	w.logger.Debug("[Batch/DB] exec Map SQL",
+		"query", query,
 		"params", params,
 		"toSetCount", len(agg.ToSet),
 		"toDelCount", len(agg.ToDel),
@@ -796,6 +823,19 @@ func (w *PeriodicWriter) convertWherePlaceholders(where string, paramIdx *int) s
 		}
 	}
 	return result.String()
+}
+
+// fnv32 FNV hash function
+func fnv32(key string) uint32 {
+	hash := uint32(2166136261)
+	const prime32 = uint32(16777619)
+
+	for i := 0; i < len(key); i++ {
+		hash *= prime32
+		hash ^= uint32(key[i])
+	}
+
+	return hash
 }
 
 // Stop 停止写入器
@@ -833,20 +873,20 @@ func (w *PeriodicWriter) Stats() map[string]interface{} {
 	}
 
 	return map[string]interface{}{
-		"total_groups":    totalGroups,
-		"counter_groups":  counterGroups,
-		"slice_groups":    sliceGroups,
-		"map_groups":      mapGroups,
-		"content_groups":  contentGroups,
-		"task_count":      atomic.LoadInt64(&w.taskCount),
-		"max_queue_size":  w.maxQueueSize,
-		"flush_interval":  w.flushInterval.String(),
-		"flush_timeout":   w.flushTimeout.String(),
-		"is_flushing":     atomic.LoadInt32(&w.flushing) == 1,
-		"flush_total":     atomic.LoadInt64(&w.stats.flushTotal),
-		"flush_failed_groups": atomic.LoadInt64(&w.stats.flushFailedGroups),
+		"total_groups":            totalGroups,
+		"counter_groups":          counterGroups,
+		"slice_groups":            sliceGroups,
+		"map_groups":              mapGroups,
+		"content_groups":          contentGroups,
+		"task_count":              atomic.LoadInt64(&w.taskCount),
+		"max_queue_size":          w.maxQueueSize,
+		"flush_interval":          w.flushInterval.String(),
+		"flush_timeout":           w.flushTimeout.String(),
+		"is_flushing":             atomic.LoadInt32(&w.flushing) == 1,
+		"flush_total":             atomic.LoadInt64(&w.stats.flushTotal),
+		"flush_failed_groups":     atomic.LoadInt64(&w.stats.flushFailedGroups),
 		"flush_total_duration_ns": atomic.LoadInt64(&w.stats.flushDurationNanos),
-		"last_flush_unix_nano": atomic.LoadInt64(&w.stats.lastFlushUnixNano),
+		"last_flush_unix_nano":    atomic.LoadInt64(&w.stats.lastFlushUnixNano),
 	}
 }
 

@@ -32,20 +32,19 @@ type zmsg struct {
 	bloom *cache.BloomFilter
 
 	// 内部管理器
-	idGen       id.Generator
-	batchMgr    *batch.Manager
+	idGen          id.Generator
 	periodicWriter *batch.PeriodicWriter // 周期写入器
-	store       *postgresStore
-	sqlExec     *sqlpkg.Executor
-	queue       *queue.Queue // 异步队列
+	store          *postgresStore
+	sqlExec        *sqlpkg.Executor
+	queue          *queue.Queue // 异步队列
 
 	// 配置
 	config Config
 
 	// 状态
-	mu     sync.RWMutex
-	closed bool
-	logger log.Logger
+	mu      sync.RWMutex
+	closed  bool
+	logger  log.Logger
 	metrics *metrics
 }
 
@@ -106,14 +105,14 @@ func (z *zmsg) initComponents(ctx context.Context) error {
 
 	// 3. 初始化异步队列 (asynq)
 	queueCfg := &queue.Config{
-		RedisAddr:     z.config.Queue.Addr,
-		RedisPassword: z.config.Queue.Password,
-		RedisDB:       z.config.Queue.DB,
-		Concurrency:   z.config.Queue.Concurrency,
-		Queues:        z.config.Queue.Queues,
-		RetryMax:      z.config.Queue.RetryMax,
-		RetryDelay:    z.config.Queue.RetryDelay,
-		TaskDelay:     z.config.Queue.TaskDelay,
+		RedisAddr:                        z.config.Queue.Addr,
+		RedisPassword:                    z.config.Queue.Password,
+		RedisDB:                          z.config.Queue.DB,
+		Concurrency:                      z.config.Queue.Concurrency,
+		Queues:                           z.config.Queue.Queues,
+		RetryMax:                         z.config.Queue.RetryMax,
+		RetryDelay:                       z.config.Queue.RetryDelay,
+		TaskDelay:                        z.config.Queue.TaskDelay,
 		FallbackToSyncStoreOnEnqueueFail: z.config.Queue.FallbackToSyncStoreOnEnqueueFail,
 	}
 	z.queue, err = queue.New(queueCfg)
@@ -136,11 +135,11 @@ func (z *zmsg) initComponents(ctx context.Context) error {
 
 	// 初始化布隆过滤器
 	bloomConfig := &cache.BloomConfig{
-		Key:       RedisPrefixBloom + "filter",
-		Capacity:  uint(z.config.Cache.BloomCapacity),
-		ErrorRate: z.config.Cache.BloomErrorRate,
-		SyncInterval:     z.config.Cache.BloomSyncInterval,
-		EnableLocalCache: z.config.Cache.BloomEnableLocalCache,
+		Key:                  RedisPrefixBloom + "filter",
+		Capacity:             uint(z.config.Cache.BloomCapacity),
+		ErrorRate:            z.config.Cache.BloomErrorRate,
+		SyncInterval:         z.config.Cache.BloomSyncInterval,
+		EnableLocalCache:     z.config.Cache.BloomEnableLocalCache,
 		LocalCacheMaxEntries: z.config.Cache.BloomLocalCacheMaxEntries,
 		LocalCacheTTL:        z.config.Cache.BloomLocalCacheTTL,
 		DeleteStrategy:       z.config.Cache.BloomDeleteStrategy,
@@ -162,9 +161,6 @@ func (z *zmsg) initComponents(ctx context.Context) error {
 		return wrapError("ID_GEN_INIT_FAILED", "failed to create id generator", err)
 	}
 
-	// 初始化批处理管理器
-	z.batchMgr = batch.NewManager(z.config.Batch.Size, z.config.Batch.Interval, z.config.Batch.MaxQueueSize)
-
 	// 初始化周期写入器
 	writerCfg := batch.WriterConfig{
 		FlushInterval: z.config.Batch.Interval,
@@ -181,13 +177,9 @@ func (z *zmsg) initComponents(ctx context.Context) error {
 	return nil
 }
 
-
 // startBackgroundWorkers 启动后台工作协程
 func (z *zmsg) startBackgroundWorkers(ctx context.Context) {
-	// 1. 启动批处理管理器
-	z.batchMgr.Start(ctx)
-
-	// 2. 启动周期写入器
+	// 1. 启动周期写入器
 	z.periodicWriter.Start()
 
 	// 3. 启动队列 worker (asynq)
@@ -357,8 +349,8 @@ func (z *zmsg) CacheAndPeriodicStore(ctx context.Context, key string, value []by
 	}()
 
 	taskTypeStr := []string{"Content", "Counter", "Slice", "Map"}[sqlTask.TaskType]
-	z.logger.Debug("[CacheAndPeriodicStore] start", 
-		"key", key, 
+	z.logger.Debug("[CacheAndPeriodicStore] start",
+		"key", key,
 		"taskType", taskTypeStr,
 		"batchKey", sqlTask.BatchKey,
 		"table", sqlTask.Table,
@@ -402,8 +394,8 @@ func (z *zmsg) CacheAndPeriodicStore(ctx context.Context, key string, value []by
 		MapValue: sqlTask.MapValue,
 	}
 
-	z.logger.Debug("[Batch] submit task", 
-		"batchKey", task.BatchKey, 
+	z.logger.Debug("[Batch] submit task",
+		"batchKey", task.BatchKey,
 		"taskType", taskTypeStr,
 		"delta", task.Delta,
 		"sliceValue", task.SliceValue,
@@ -547,9 +539,9 @@ func (z *zmsg) UpdateStore(ctx context.Context, key string, value []byte,
 		return wrapError("CACHE_FAILED", "update cache failed", err)
 	}
 
-		// 2. 执行 SQL 更新
-		task := convertSQLTask(sqlTask)
-		_, err = z.sqlExec.Execute(ctx, task)
+	// 2. 执行 SQL 更新
+	task := convertSQLTask(sqlTask)
+	_, err = z.sqlExec.Execute(ctx, task)
 	if err != nil {
 		return wrapError("STORE_FAILED", "update store failed", err)
 	}
@@ -832,8 +824,8 @@ func (z *zmsg) queryPipeline(ctx context.Context, key string) ([]byte, error) {
 func (z *zmsg) registerQueueHandlers() {
 	// 保存任务处理器
 	z.queue.RegisterHandler(queue.TypeSave, func(ctx context.Context, payload *queue.TaskPayload) error {
-		z.logger.Debug("[Asynq] process SAVE task", 
-			"key", payload.Key, 
+		z.logger.Debug("[Asynq] process SAVE task",
+			"key", payload.Key,
 			"query", payload.Query,
 			"createdAt", payload.CreatedAt)
 		task := sqlpkg.NewTask(payload.Query, payload.Params...)
@@ -842,16 +834,16 @@ func (z *zmsg) registerQueueHandlers() {
 			z.logger.Error("[Asynq] SAVE task failed", "key", payload.Key, "error", err)
 			return err
 		}
-		z.logger.Debug("[Asynq] SAVE task success", 
-			"key", payload.Key, 
+		z.logger.Debug("[Asynq] SAVE task success",
+			"key", payload.Key,
 			"rowsAffected", result.RowsAffected)
 		return nil
 	})
 
 	// 删除任务处理器
 	z.queue.RegisterHandler(queue.TypeDelete, func(ctx context.Context, payload *queue.TaskPayload) error {
-		z.logger.Debug("[Asynq] process DELETE task", 
-			"key", payload.Key, 
+		z.logger.Debug("[Asynq] process DELETE task",
+			"key", payload.Key,
 			"query", payload.Query)
 		task := sqlpkg.NewTask(payload.Query, payload.Params...)
 		result, err := z.sqlExec.Execute(ctx, task)
@@ -859,16 +851,16 @@ func (z *zmsg) registerQueueHandlers() {
 			z.logger.Error("[Asynq] DELETE task failed", "key", payload.Key, "error", err)
 			return err
 		}
-		z.logger.Debug("[Asynq] DELETE task success", 
-			"key", payload.Key, 
+		z.logger.Debug("[Asynq] DELETE task success",
+			"key", payload.Key,
 			"rowsAffected", result.RowsAffected)
 		return nil
 	})
 
 	// 更新任务处理器
 	z.queue.RegisterHandler(queue.TypeUpdate, func(ctx context.Context, payload *queue.TaskPayload) error {
-		z.logger.Debug("[Asynq] process UPDATE task", 
-			"key", payload.Key, 
+		z.logger.Debug("[Asynq] process UPDATE task",
+			"key", payload.Key,
 			"query", payload.Query)
 		task := sqlpkg.NewTask(payload.Query, payload.Params...)
 		result, err := z.sqlExec.Execute(ctx, task)
@@ -876,8 +868,8 @@ func (z *zmsg) registerQueueHandlers() {
 			z.logger.Error("[Asynq] UPDATE task failed", "key", payload.Key, "error", err)
 			return err
 		}
-		z.logger.Debug("[Asynq] UPDATE task success", 
-			"key", payload.Key, 
+		z.logger.Debug("[Asynq] UPDATE task success",
+			"key", payload.Key,
 			"rowsAffected", result.RowsAffected)
 		return err
 	})
@@ -946,7 +938,7 @@ func (z *zmsg) collectMetrics(ctx context.Context) {
 	// 指标收集实现
 	ticker := time.NewTicker(30 * time.Second)
 	defer ticker.Stop()
-	
+
 	for {
 		select {
 		case <-ctx.Done():
@@ -960,9 +952,9 @@ func (z *zmsg) collectMetrics(ctx context.Context) {
 
 // batchOperation 批处理操作实现
 type batchOperation struct {
-	z      *zmsg
-	items  []batchItem
-	mu     sync.Mutex
+	z     *zmsg
+	items []batchItem
+	mu    sync.Mutex
 }
 
 type batchItem struct {

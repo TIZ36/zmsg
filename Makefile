@@ -1,8 +1,8 @@
-.PHONY: build test lint clean integration-test docker-up docker-down bench report analyse
+.PHONY: build test lint clean integration-test docker-up docker-down bench report analyse tidy
 
 # Build
 build:
-	go build -o bin/zmsg ./cmd/example/
+	go build -o bin/zmsg ./cmd/
 
 # Run tests
 test:
@@ -12,7 +12,7 @@ test:
 integration-test:
 	docker-compose up -d
 	sleep 5
-	go test -v ./tests/integration/...
+	go test -v -run=Integration ./tests/
 	docker-compose down
 
 # Lint
@@ -27,7 +27,7 @@ clean:
 
 # Run example
 run:
-	go run cmd/example/main.go
+	go run cmd/main.go
 
 # Docker compose
 docker-up:
@@ -38,7 +38,7 @@ docker-down:
 
 # Benchmark
 benchmark:
-	go test -bench=. -benchmem ./tests/performance/...
+	go test -bench=. -benchmem ./tests/
 
 # Run benchmark tests and save results
 bench:
@@ -83,6 +83,10 @@ report:
 coverage:
 	go test -coverprofile=coverage.out ./...
 	go tool cover -html=coverage.out
+
+# Tidy
+tidy:
+	go mod tidy
 
 # Generate docs
 docs:

@@ -17,6 +17,7 @@ type Config struct {
 	Batch    BatchConfig    `yaml:"batch" json:"batch"`
 	ID       IDConfig       `yaml:"id" json:"id"`
 	Log      LogConfig      `yaml:"log" json:"log"`
+	WAL      WALConfig      `yaml:"wal" json:"wal"`
 
 	// 默认值
 	DefaultTTL         time.Duration `yaml:"default_ttl" json:"default_ttl"`
@@ -39,15 +40,15 @@ type RedisConfig struct {
 
 // QueueConfig 队列配置 (asynq)
 type QueueConfig struct {
-	Addr        string        `yaml:"addr" json:"addr"`
-	Password    string        `yaml:"password" json:"password"`
-	DB          int           `yaml:"db" json:"db"`
-	Concurrency int           `yaml:"concurrency" json:"concurrency"`
-	Queues      map[string]int `yaml:"queues" json:"queues"`
-	RetryMax    int           `yaml:"retry_max" json:"retry_max"`     // 最大重试次数
-	RetryDelay  time.Duration `yaml:"retry_delay" json:"retry_delay"` // 重试延迟
-	TaskDelay   time.Duration `yaml:"task_delay" json:"task_delay"`   // 任务延迟执行时间（0=立即）
-	FallbackToSyncStoreOnEnqueueFail bool `yaml:"fallback_to_sync_store_on_enqueue_fail" json:"fallback_to_sync_store_on_enqueue_fail"`
+	Addr                             string         `yaml:"addr" json:"addr"`
+	Password                         string         `yaml:"password" json:"password"`
+	DB                               int            `yaml:"db" json:"db"`
+	Concurrency                      int            `yaml:"concurrency" json:"concurrency"`
+	Queues                           map[string]int `yaml:"queues" json:"queues"`
+	RetryMax                         int            `yaml:"retry_max" json:"retry_max"`     // 最大重试次数
+	RetryDelay                       time.Duration  `yaml:"retry_delay" json:"retry_delay"` // 重试延迟
+	TaskDelay                        time.Duration  `yaml:"task_delay" json:"task_delay"`   // 任务延迟执行时间（0=立即）
+	FallbackToSyncStoreOnEnqueueFail bool           `yaml:"fallback_to_sync_store_on_enqueue_fail" json:"fallback_to_sync_store_on_enqueue_fail"`
 }
 
 // CacheConfig 缓存配置
@@ -57,25 +58,25 @@ type CacheConfig struct {
 	L1NumCounters int64 `yaml:"l1_num_counters" json:"l1_num_counters"`
 
 	// 布隆过滤器
-	BloomCapacity  int64   `yaml:"bloom_capacity" json:"bloom_capacity"`
-	BloomErrorRate float64 `yaml:"bloom_error_rate" json:"bloom_error_rate"`
-	BloomEnableLocalCache bool `yaml:"bloom_enable_local_cache" json:"bloom_enable_local_cache"`
-	BloomSyncInterval time.Duration `yaml:"bloom_sync_interval" json:"bloom_sync_interval"`
-	BloomRedisTTL      time.Duration `yaml:"bloom_redis_ttl" json:"bloom_redis_ttl"`
-	BloomDeleteStrategy string       `yaml:"bloom_delete_strategy" json:"bloom_delete_strategy"`
-	BloomLocalCacheMaxEntries int     `yaml:"bloom_local_cache_max_entries" json:"bloom_local_cache_max_entries"`
+	BloomCapacity             int64         `yaml:"bloom_capacity" json:"bloom_capacity"`
+	BloomErrorRate            float64       `yaml:"bloom_error_rate" json:"bloom_error_rate"`
+	BloomEnableLocalCache     bool          `yaml:"bloom_enable_local_cache" json:"bloom_enable_local_cache"`
+	BloomSyncInterval         time.Duration `yaml:"bloom_sync_interval" json:"bloom_sync_interval"`
+	BloomRedisTTL             time.Duration `yaml:"bloom_redis_ttl" json:"bloom_redis_ttl"`
+	BloomDeleteStrategy       string        `yaml:"bloom_delete_strategy" json:"bloom_delete_strategy"`
+	BloomLocalCacheMaxEntries int           `yaml:"bloom_local_cache_max_entries" json:"bloom_local_cache_max_entries"`
 	BloomLocalCacheTTL        time.Duration `yaml:"bloom_local_cache_ttl" json:"bloom_local_cache_ttl"`
 
 	// 缓存一致性策略
-	RollbackL1OnL2Fail bool `yaml:"rollback_l1_on_l2_fail" json:"rollback_l1_on_l2_fail"`
-	EnqueueCompensationOnL2Fail bool `yaml:"enqueue_compensation_on_l2_fail" json:"enqueue_compensation_on_l2_fail"`
-	CompensationDelay time.Duration `yaml:"compensation_delay" json:"compensation_delay"`
+	RollbackL1OnL2Fail          bool          `yaml:"rollback_l1_on_l2_fail" json:"rollback_l1_on_l2_fail"`
+	EnqueueCompensationOnL2Fail bool          `yaml:"enqueue_compensation_on_l2_fail" json:"enqueue_compensation_on_l2_fail"`
+	CompensationDelay           time.Duration `yaml:"compensation_delay" json:"compensation_delay"`
 }
 
 // BatchConfig 批处理配置
 type BatchConfig struct {
 	Size         int           `yaml:"size" json:"size"`
-	Interval     time.Duration `yaml:"interval" json:"interval"`              // 周期 flush 间隔
+	Interval     time.Duration `yaml:"interval" json:"interval"`             // 周期 flush 间隔
 	MaxQueueSize int64         `yaml:"max_queue_size" json:"max_queue_size"` // 队列长度阈值（高并发触发）
 	WriterShards int           `yaml:"writer_shards" json:"writer_shards"`
 	FlushTimeout time.Duration `yaml:"flush_timeout" json:"flush_timeout"`
@@ -126,6 +127,14 @@ type LogConfig struct {
 	MetricsEnabled bool `yaml:"metrics_enabled" json:"metrics_enabled"`
 }
 
+// WALConfig WAL 配置
+type WALConfig struct {
+	Enabled bool   `yaml:"enabled" json:"enabled"`
+	Dir     string `yaml:"dir" json:"dir"`
+	// NoSync 禁用 fsync (更高性能，但故障时可能丢数)
+	NoSync bool `yaml:"no_sync" json:"no_sync"`
+}
+
 // DefaultConfig 默认配置
 func DefaultConfig() Config {
 	return Config{
@@ -144,22 +153,22 @@ func DefaultConfig() Config {
 				"default":  3,
 				"low":      1,
 			},
-			RetryMax:    3,
-			RetryDelay:  5 * time.Second,
-			TaskDelay:   0, // 默认立即执行
+			RetryMax:   3,
+			RetryDelay: 5 * time.Second,
+			TaskDelay:  0, // 默认立即执行
 		},
 		Cache: CacheConfig{
-			L1MaxCost:      1000000,
-			L1NumCounters:  10000000,
-			BloomCapacity:  1000000,
-			BloomErrorRate: 0.01,
-			BloomEnableLocalCache: false,
-			BloomSyncInterval: 30 * time.Second,
-			BloomRedisTTL:      24 * time.Hour,
-			BloomDeleteStrategy: "local",
-			BloomLocalCacheMaxEntries: 0,
-			BloomLocalCacheTTL:        0,
-			RollbackL1OnL2Fail:        false,
+			L1MaxCost:                   1000000,
+			L1NumCounters:               10000000,
+			BloomCapacity:               1000000,
+			BloomErrorRate:              0.01,
+			BloomEnableLocalCache:       false,
+			BloomSyncInterval:           30 * time.Second,
+			BloomRedisTTL:               24 * time.Hour,
+			BloomDeleteStrategy:         "local",
+			BloomLocalCacheMaxEntries:   0,
+			BloomLocalCacheTTL:          0,
+			RollbackL1OnL2Fail:          false,
 			EnqueueCompensationOnL2Fail: false,
 			CompensationDelay:           0,
 		},
@@ -187,6 +196,11 @@ func DefaultConfig() Config {
 			TimeFormat:        "iso8601",
 			ColorOutput:       false,
 			MetricsEnabled:    true,
+		},
+		WAL: WALConfig{
+			Enabled: false,
+			Dir:     "data/wal",
+			NoSync:  false,
 		},
 		DefaultTTL:         24 * time.Hour,
 		DefaultConsistency: ConsistencyEventual,

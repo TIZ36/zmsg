@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
+	"net/http"
 	"sync"
 	"time"
 
@@ -167,6 +168,9 @@ func (z *zmsg) initComponents(ctx context.Context) error {
 		MaxQueueSize:  z.config.Batch.MaxQueueSize,
 		ShardCount:    z.config.Batch.WriterShards,
 		FlushTimeout:  z.config.Batch.FlushTimeout,
+		WALEnabled:    z.config.WAL.Enabled,
+		WALDir:        z.config.WAL.Dir,
+		WALNoSync:     z.config.WAL.NoSync,
 	}
 	z.periodicWriter = batch.NewPeriodicWriter(z.db, z.logger, writerCfg)
 
@@ -1043,4 +1047,12 @@ func (b *batchOperation) Size() int {
 	b.mu.Lock()
 	defer b.mu.Unlock()
 	return len(b.items)
+}
+
+// MetricsHandler 实现 ZMsg 接口
+func (z *zmsg) MetricsHandler() http.Handler {
+	if z.metrics != nil && z.metrics.Exporter() != nil {
+		return z.metrics.Exporter().Handler()
+	}
+	return http.NotFoundHandler()
 }

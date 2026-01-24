@@ -5,10 +5,13 @@ import (
 	"database/sql"
 	"encoding/json"
 	"fmt"
+	"os"
 	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
+
+	"github.com/tidwall/wal"
 )
 
 // TaskType 任务类型
@@ -85,6 +88,12 @@ type PeriodicWriter struct {
 	flushCh  chan struct{} // flush 信号通道
 	flushing int32         // 是否正在 flush（原子操作）
 
+	// WAL
+	walEnabled   bool
+	walLog       *wal.Log
+	lastWalIndex uint64
+	walMu        sync.Mutex
+
 	stats writerStats
 }
 
@@ -157,6 +166,11 @@ type WriterConfig struct {
 	MaxQueueSize  int64         // 队列长度阈值（达到后立即 flush）
 	ShardCount    int           // 分片数量
 	FlushTimeout  time.Duration // flush 超时
+
+	// WAL 配置
+	WALEnabled bool
+	WALDir     string
+	WALNoSync  bool
 }
 
 // DefaultWriterConfig 默认配置
@@ -190,10 +204,75 @@ func NewPeriodicWriter(db *sql.DB, logger Logger, cfg WriterConfig) *PeriodicWri
 		ctx:           ctx,
 		cancel:        cancel,
 		flushCh:       make(chan struct{}, 1), // 带缓冲，避免阻塞
+		walEnabled:    cfg.WALEnabled,
+	}
+
+	if w.walEnabled {
+		// Create WAL directory if not exists
+		if err := os.MkdirAll(cfg.WALDir, 0755); err != nil {
+			logger.Error("failed to create WAL directory", "error", err, "dir", cfg.WALDir)
+			w.walEnabled = false
+		} else {
+			opts := wal.DefaultOptions
+			opts.NoSync = cfg.WALNoSync
+			log, err := wal.Open(cfg.WALDir, opts)
+			if err != nil {
+				logger.Error("failed to open WAL", "error", err, "dir", cfg.WALDir)
+				w.walEnabled = false
+			} else {
+				w.walLog = log
+				last, err := log.LastIndex()
+				if err == nil {
+					w.lastWalIndex = last
+				}
+				w.logger.Info("WAL initialized", "dir", cfg.WALDir, "lastIndex", w.lastWalIndex)
+			}
+		}
 	}
 
 	w.initShards()
 	return w
+}
+
+// recoverWAL 从 WAL 恢复挂起任务
+func (w *PeriodicWriter) recoverWAL() {
+	if !w.walEnabled || w.walLog == nil {
+		return
+	}
+
+	first, err := w.walLog.FirstIndex()
+	if err != nil {
+		return
+	}
+	last, err := w.walLog.LastIndex()
+	if err != nil {
+		return
+	}
+
+	if first == 0 || last == 0 {
+		return
+	}
+
+	w.logger.Info("recovering tasks from WAL", "first", first, "last", last)
+	recovered := 0
+	for i := first; i <= last; i++ {
+		data, err := w.walLog.Read(i)
+		if err != nil {
+			w.logger.Error("failed to read WAL entry", "index", i, "error", err)
+			continue
+		}
+
+		var task PeriodicTask
+		if err := json.Unmarshal(data, &task); err != nil {
+			w.logger.Error("failed to unmarshal recovered task", "index", i, "error", err)
+			continue
+		}
+
+		// Re-submit to memory (bypass WAL writing this time)
+		w.submitInternal(&task)
+		recovered++
+	}
+	w.logger.Info("WAL recovery completed", "recovered", recovered)
 }
 
 func (w *PeriodicWriter) initShards() {
@@ -207,6 +286,9 @@ func (w *PeriodicWriter) initShards() {
 
 // Start 启动周期写入
 func (w *PeriodicWriter) Start() {
+	// 启动前先恢复 WAL
+	w.recoverWAL()
+
 	w.wg.Add(1)
 	go w.flushLoop()
 	w.logger.Info("periodic writer started",
@@ -230,6 +312,26 @@ func (w *PeriodicWriter) Submit(task *PeriodicTask) error {
 		task.BatchKey = b.String()
 	}
 
+	// 1. WAL Persistence
+	if w.walLog != nil && w.walEnabled {
+		data, err := json.Marshal(task)
+		if err != nil {
+			w.logger.Error("failed to marshal task for WAL", "error", err, "batchKey", task.BatchKey)
+		} else {
+			w.walMu.Lock()
+			w.lastWalIndex++
+			index := w.lastWalIndex
+			if err := w.walLog.Write(index, data); err != nil {
+				w.logger.Error("failed to write to WAL", "error", err, "index", index)
+			}
+			w.walMu.Unlock()
+		}
+	}
+
+	return w.submitInternal(task)
+}
+
+func (w *PeriodicWriter) submitInternal(task *PeriodicTask) error {
 	shard := w.getShard(task.BatchKey)
 	shard.mu.Lock()
 	group, exists := shard.tasks[task.BatchKey]
@@ -530,6 +632,18 @@ func (w *PeriodicWriter) flushAll(trigger string) {
 		"groupsFailed", failed,
 		"totalGroups", len(toFlush),
 		"taskCount", prevCount)
+
+	// Truncate WAL if everything flushes successfully
+	if w.walEnabled && w.walLog != nil && failed == 0 {
+		w.walMu.Lock()
+		index := w.lastWalIndex
+		w.walMu.Unlock()
+		if err := w.walLog.TruncateFront(index); err != nil {
+			w.logger.Error("failed to truncate WAL", "error", err, "index", index)
+		} else {
+			w.logger.Debug("WAL truncated", "index", index)
+		}
+	}
 
 	atomic.AddInt64(&w.stats.flushTotal, 1)
 	if failed > 0 {

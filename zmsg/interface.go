@@ -2,6 +2,7 @@ package zmsg
 
 import (
 	"context"
+	"net/http"
 	"time"
 )
 
@@ -53,6 +54,9 @@ type ZMsg interface {
 	Load(filePath string) *Migration
 	LoadSQL(sql string) *Migration
 	LoadDir(dirPath string) *MigrationSet
+
+	// MetricsHandler 返回指标 HTTP 处理器
+	MetricsHandler() http.Handler
 
 	// 关闭
 	Close() error
@@ -110,7 +114,6 @@ func (t *SQLTask) WithBatchKey(key string) *SQLTask {
 	t.BatchKey = key
 	return t
 }
-
 
 // TaskType 任务类型（用于周期写聚合策略）
 type TaskType int

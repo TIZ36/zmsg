@@ -20,14 +20,19 @@ type metrics struct {
 	queueEnqueueFailures int64
 	queueEnqueueSuccess  int64
 
-	queryCount        int64
+	queryCount         int64
 	queryDurationNanos int64
-	writeCount        int64
+	writeCount         int64
 	writeDurationNanos int64
+
+	// Prometheus Exporter
+	exporter *MetricsExporter
 }
 
 func newMetrics() *metrics {
-	return &metrics{}
+	return &metrics{
+		exporter: NewMetricsExporter("zmsg"),
+	}
 }
 
 func (m *metrics) recordCacheHit(level string) {
@@ -39,10 +44,38 @@ func (m *metrics) recordCacheHit(level string) {
 	case "db":
 		atomic.AddInt64(&m.dbHits, 1)
 	}
+	if m.exporter != nil {
+		m.exporter.cacheHits.WithLabelValues(level).Inc()
+	}
 }
 
 func (m *metrics) recordCacheMiss() {
 	atomic.AddInt64(&m.misses, 1)
+	if m.exporter != nil {
+		m.exporter.cacheMisses.Inc()
+	}
+}
+
+// recordWriteLatency records latency in nanoseconds but updates histogram in seconds
+func (m *metrics) recordWriteLatency(d time.Duration) {
+	atomic.AddInt64(&m.writeCount, 1)
+	atomic.AddInt64(&m.writeDurationNanos, d.Nanoseconds())
+	if m.exporter != nil {
+		m.exporter.writeLatency.Observe(d.Seconds())
+	}
+}
+
+func (m *metrics) recordQueryLatency(d time.Duration) {
+	atomic.AddInt64(&m.queryCount, 1)
+	atomic.AddInt64(&m.queryDurationNanos, d.Nanoseconds())
+	if m.exporter != nil {
+		m.exporter.queryLatency.Observe(d.Seconds())
+	}
+}
+
+// Exporter exposes the Prometheus exporter
+func (m *metrics) Exporter() *MetricsExporter {
+	return m.exporter
 }
 
 func (m *metrics) recordCacheWriteFailure() {
@@ -63,16 +96,6 @@ func (m *metrics) recordQueueEnqueueFailure() {
 
 func (m *metrics) recordQueueEnqueueSuccess() {
 	atomic.AddInt64(&m.queueEnqueueSuccess, 1)
-}
-
-func (m *metrics) recordQueryLatency(d time.Duration) {
-	atomic.AddInt64(&m.queryCount, 1)
-	atomic.AddInt64(&m.queryDurationNanos, d.Nanoseconds())
-}
-
-func (m *metrics) recordWriteLatency(d time.Duration) {
-	atomic.AddInt64(&m.writeCount, 1)
-	atomic.AddInt64(&m.writeDurationNanos, d.Nanoseconds())
 }
 
 // StatsSnapshot 运行时统计快照（非接口方法，按需断言使用）
@@ -126,13 +149,13 @@ func (z *zmsg) Stats() StatsSnapshot {
 
 	return StatsSnapshot{
 		Cache: CacheStats{
-			L1Hits: atomic.LoadInt64(&z.metrics.l1Hits),
-			L2Hits: atomic.LoadInt64(&z.metrics.l2Hits),
-			DBHits: atomic.LoadInt64(&z.metrics.dbHits),
-			Misses: atomic.LoadInt64(&z.metrics.misses),
-			WriteFailures: atomic.LoadInt64(&z.metrics.cacheWriteFailures),
-			Rollbacks:     atomic.LoadInt64(&z.metrics.cacheRollbacks),
-			Compensations: atomic.LoadInt64(&z.metrics.cacheCompensations),
+			L1Hits:               atomic.LoadInt64(&z.metrics.l1Hits),
+			L2Hits:               atomic.LoadInt64(&z.metrics.l2Hits),
+			DBHits:               atomic.LoadInt64(&z.metrics.dbHits),
+			Misses:               atomic.LoadInt64(&z.metrics.misses),
+			WriteFailures:        atomic.LoadInt64(&z.metrics.cacheWriteFailures),
+			Rollbacks:            atomic.LoadInt64(&z.metrics.cacheRollbacks),
+			Compensations:        atomic.LoadInt64(&z.metrics.cacheCompensations),
 			QueueEnqueueFailures: atomic.LoadInt64(&z.metrics.queueEnqueueFailures),
 			QueueEnqueueSuccess:  atomic.LoadInt64(&z.metrics.queueEnqueueSuccess),
 		},

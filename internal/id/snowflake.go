@@ -70,8 +70,10 @@ func NewSnowflake(cfg *Config) (*Snowflake, error) {
 		}
 		sf.nodeMgr = nodeMgr
 
-		// 获取节点ID
-		nodeID, err := nodeMgr.AcquireNodeID(context.Background())
+		// 获取节点ID（带超时，防止阻塞初始化）
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		nodeID, err := nodeMgr.AcquireNodeID(ctx)
+		cancel()
 		if err != nil {
 			return nil, fmt.Errorf("failed to acquire node id: %w", err)
 		}

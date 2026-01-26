@@ -29,11 +29,11 @@ type BloomFilter struct {
 
 // BloomConfig 布隆过滤器配置
 type BloomConfig struct {
-	Key              string
-	Capacity         uint
-	ErrorRate        float64
-	SyncInterval     time.Duration
-	EnableLocalCache bool
+	Key                  string
+	Capacity             uint
+	ErrorRate            float64
+	SyncInterval         time.Duration
+	EnableLocalCache     bool
 	LocalCacheMaxEntries int
 	LocalCacheTTL        time.Duration
 	DeleteStrategy       string
@@ -49,11 +49,11 @@ const (
 func NewBloomFilter(config *BloomConfig, redisClient *redis.Client) *BloomFilter {
 	if config == nil {
 		config = &BloomConfig{
-			Key:              "zmsg:bloom:filter",
-			Capacity:         1000000,
-			ErrorRate:        0.01,
-			SyncInterval:     30 * time.Second,
-			EnableLocalCache: true,
+			Key:                  "zmsg:bloom:filter",
+			Capacity:             1000000,
+			ErrorRate:            0.01,
+			SyncInterval:         30 * time.Second,
+			EnableLocalCache:     true,
 			LocalCacheMaxEntries: 0,
 			LocalCacheTTL:        0,
 			DeleteStrategy:       BloomDeleteLocal,
@@ -81,11 +81,13 @@ func NewBloomFilter(config *BloomConfig, redisClient *redis.Client) *BloomFilter
 		bf.localCache = newLocalCache(config.LocalCacheMaxEntries, config.LocalCacheTTL)
 	}
 
-	// 从Redis加载布隆过滤器
-	if err := bf.loadFromRedis(context.Background()); err != nil {
-		// 如果加载失败，创建新的布隆过滤器
-		bf.filter = bloom.NewWithEstimates(config.Capacity, config.ErrorRate)
-	}
+	// 从Redis异步加载布隆过滤器
+	go func() {
+		if err := bf.loadFromRedis(context.Background()); err != nil {
+			// 如果加载失败，保持当前的空过滤器并记录错误
+			fmt.Printf("Failed to load bloom filter from Redis: %v\n", err)
+		}
+	}()
 
 	// 启动同步协程
 	if config.SyncInterval > 0 {
@@ -415,4 +417,3 @@ func (b *BloomFilter) GetStats() map[string]interface{} {
 
 	return stats
 }
-

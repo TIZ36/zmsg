@@ -82,6 +82,7 @@ func New(ctx context.Context, cfg Config) (ZMsg, error) {
 	// 启动后台协程
 	go z.startBackgroundWorkers(ctx)
 
+	z.logger.Info("zmsg.New returning")
 	return z, nil
 }
 

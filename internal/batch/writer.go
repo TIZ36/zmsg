@@ -286,8 +286,11 @@ func (w *PeriodicWriter) initShards() {
 
 // Start 启动周期写入
 func (w *PeriodicWriter) Start() {
-	// 启动前先恢复 WAL
-	w.recoverWAL()
+	// 异步恢复 WAL，不阻塞启动
+	go func() {
+		w.recoverWAL()
+		w.logger.Info("WAL recovery finished")
+	}()
 
 	w.wg.Add(1)
 	go w.flushLoop()

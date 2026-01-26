@@ -58,6 +58,7 @@ type CacheConfig struct {
 	L1NumCounters int64 `yaml:"l1_num_counters" json:"l1_num_counters"`
 
 	// 布隆过滤器
+	BloomEnabled              bool          `yaml:"bloom_enabled" json:"bloom_enabled"`
 	BloomCapacity             int64         `yaml:"bloom_capacity" json:"bloom_capacity"`
 	BloomErrorRate            float64       `yaml:"bloom_error_rate" json:"bloom_error_rate"`
 	BloomEnableLocalCache     bool          `yaml:"bloom_enable_local_cache" json:"bloom_enable_local_cache"`
@@ -158,6 +159,7 @@ func DefaultConfig() Config {
 			TaskDelay:  0, // 默认立即执行
 		},
 		Cache: CacheConfig{
+			BloomEnabled:                false,
 			L1MaxCost:                   1000000,
 			L1NumCounters:               10000000,
 			BloomCapacity:               1000000,
@@ -267,6 +269,7 @@ func (c *Config) Validate() error {
 			"low":      1,
 		}
 	}
+	// Bloom enabled by default if not specified (though yaml unmarshal into bool is false by default, we rely on DefaultConfig)
 	if c.Cache.BloomSyncInterval <= 0 {
 		c.Cache.BloomSyncInterval = 30 * time.Second
 	}

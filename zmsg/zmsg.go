@@ -135,19 +135,21 @@ func (z *zmsg) initComponents(ctx context.Context) error {
 	// 5. 初始化其他组件
 	z.sf = &singleflight.Group{}
 
-	// 初始化布隆过滤器
-	bloomConfig := &cache.BloomConfig{
-		Key:                  RedisPrefixBloom + "filter",
-		Capacity:             uint(z.config.Cache.BloomCapacity),
-		ErrorRate:            z.config.Cache.BloomErrorRate,
-		SyncInterval:         z.config.Cache.BloomSyncInterval,
-		EnableLocalCache:     z.config.Cache.BloomEnableLocalCache,
-		LocalCacheMaxEntries: z.config.Cache.BloomLocalCacheMaxEntries,
-		LocalCacheTTL:        z.config.Cache.BloomLocalCacheTTL,
-		DeleteStrategy:       z.config.Cache.BloomDeleteStrategy,
-		RedisTTL:             z.config.Cache.BloomRedisTTL,
+	// 初始化布隆过滤器（如果启用）
+	if z.config.Cache.BloomEnabled {
+		bloomConfig := &cache.BloomConfig{
+			Key:                  RedisPrefixBloom + "filter",
+			Capacity:             uint(z.config.Cache.BloomCapacity),
+			ErrorRate:            z.config.Cache.BloomErrorRate,
+			SyncInterval:         z.config.Cache.BloomSyncInterval,
+			EnableLocalCache:     z.config.Cache.BloomEnableLocalCache,
+			LocalCacheMaxEntries: z.config.Cache.BloomLocalCacheMaxEntries,
+			LocalCacheTTL:        z.config.Cache.BloomLocalCacheTTL,
+			DeleteStrategy:       z.config.Cache.BloomDeleteStrategy,
+			RedisTTL:             z.config.Cache.BloomRedisTTL,
+		}
+		z.bloom = cache.NewBloomFilter(bloomConfig, z.l2)
 	}
-	z.bloom = cache.NewBloomFilter(bloomConfig, z.l2)
 
 	// 初始化ID生成器
 	idCfg := id.DefaultConfig()
@@ -450,7 +452,9 @@ func (z *zmsg) DelStore(ctx context.Context, key string, sqlTask *SQLTask) error
 	}
 
 	// 2. 删除布隆过滤器记录
-	z.bloom.Delete(ctx, key)
+	if z.bloom != nil {
+		z.bloom.Delete(ctx, key)
+	}
 
 	// 3. 执行 SQL 删除
 	task := convertSQLTask(sqlTask)
@@ -571,6 +575,9 @@ func (z *zmsg) SQLExec(ctx context.Context, sqlTask *SQLTask) (*SQLResult, error
 // DBHit 检查 DB 命中（布隆过滤器）
 func (z *zmsg) DBHit(ctx context.Context, key string) bool {
 	z.checkClosed()
+	if z.bloom == nil {
+		return true // 如果禁用布隆过滤器，默认可能命中
+	}
 	return z.bloom.Test(ctx, key)
 }
 
@@ -701,8 +708,10 @@ func (z *zmsg) updateCacheWithPolicy(ctx context.Context, key string, value []by
 	z.logger.Debug("[L2/Redis] cache set", "key", key, "size", len(value), "ttl", ttl)
 
 	// 更新布隆过滤器
-	z.bloom.Add(ctx, key)
-	z.logger.Debug("[Bloom] add key", "key", key)
+	if z.bloom != nil {
+		z.bloom.Add(ctx, key)
+		z.logger.Debug("[Bloom] add key", "key", key)
+	}
 
 	return nil
 }
@@ -760,15 +769,17 @@ func (z *zmsg) queryPipeline(ctx context.Context, key string) ([]byte, error) {
 		}
 	}()
 
-	// 1. 布隆过滤器检查
-	if !z.bloom.Test(ctx, key) {
-		z.logger.Debug("[Bloom] key not exists (blocked)", "key", key)
-		if z.metrics != nil {
-			z.metrics.recordCacheMiss()
+	// 1. 布隆过滤器检查（如果启用）
+	if z.bloom != nil {
+		if !z.bloom.Test(ctx, key) {
+			z.logger.Debug("[Bloom] key not exists (blocked)", "key", key)
+			if z.metrics != nil {
+				z.metrics.recordCacheMiss()
+			}
+			return nil, ErrNotFound
 		}
-		return nil, ErrNotFound
+		z.logger.Debug("[Bloom] key may exist (pass)", "key", key)
 	}
-	z.logger.Debug("[Bloom] key may exist (pass)", "key", key)
 
 	// 2. L1 缓存检查
 	if value, found := z.l1.Get(key); found {

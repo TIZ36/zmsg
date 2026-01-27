@@ -130,7 +130,31 @@ The `zm.Table("name")` builder is the entry point for most operations.
 | `Del()` | Deletes from cache and DB. |
 | `Query()` | Fetches data (Cache -> DB). |
 
-### 2. Write Strategies
+### 2. Struct Tag Mapping
+
+When using `Save(struct)`, `zmsg` maps Go struct fields to database columns using the `db` tag.
+
+```go
+type User struct {
+    // 'pk' indicates this is part of the ON CONFLICT keys
+    ID string `db:"id,pk"`
+    
+    // Maps to 'name' column
+    Name string `db:"name"`
+    
+    // Fields without tags are ignored
+    Ignored string
+    
+    // Use '-' to explicitly ignore
+    Internal string `db:"-"`
+}
+```
+
+- **`pk`**: Marks a field as a Primary Key (for `ON CONFLICT` clauses). At least one PK is required.
+- **Column Name**: The first value in the tag (e.g., `name`).
+- **Update Logic**: All non-PK fields are automatically added to the `DO UPDATE SET` clause.
+
+### 3. Write Strategies
 
 You can choose different consistency levels per operation:
 

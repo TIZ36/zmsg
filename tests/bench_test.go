@@ -10,7 +10,7 @@ import (
 	"time"
 
 	"github.com/tiz36/zmsg/tests/testutil"
-	"github.com/tiz36/zmsg/zmsg"
+	"github.com/tiz36/zmsg/core"
 )
 
 // ============ 全局 zmsg 实例（避免重复初始化）============

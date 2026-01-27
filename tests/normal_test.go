@@ -10,7 +10,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"github.com/tiz36/zmsg/tests/testutil"
-	"github.com/tiz36/zmsg/zmsg"
+	"github.com/tiz36/zmsg/core"
 )
 
 // ============ SQL 语法糖测试（纯单元测试，不需要数据库）============

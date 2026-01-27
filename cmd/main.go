@@ -14,7 +14,7 @@ import (
 
 	"github.com/hibiken/asynq"
 	"github.com/hibiken/asynqmon"
-	"github.com/tiz36/zmsg/zmsg"
+	"github.com/tiz36/zmsg/core"
 )
 
 // ========== 1. 定义业务模型 ==========
@@ -172,7 +172,7 @@ func runScenario(ctx context.Context, zm zmsg.ZMsg) {
 			// 聚合计数：1000次点击只会产生极少量的 DB UPDATE
 			err := zm.Table("threads").
 				CacheKey(threadID). // L1/L2 缓存 key
-				PeriodicCount().    // 启用计数器聚合策略
+				PeriodicCount(). // 启用计数器聚合策略
 				UpdateColumn().Column("like_count").
 				Do(zmsg.Add(), 1)
 			if err != nil {

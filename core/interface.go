@@ -74,7 +74,7 @@ type ColumnBuilder interface {
 	// Column 指定列名
 	Column(name string) ColumnBuilder
 
-	// Do 执行计算操作（如 zmsg.Add(), zmsg.Sub()）
+	// Do 执行计算操作（如 core.Add(), core.Sub()）
 	Do(fn ComputeFunc, delta any) error
 }
 

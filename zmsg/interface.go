@@ -2,6 +2,7 @@ package zmsg
 
 import (
 	"context"
+	"database/sql"
 	"net/http"
 	"time"
 )
@@ -87,6 +88,9 @@ type SQLBuilder interface {
 
 	// QueryRow 执行 SQL 并扫描到 dest
 	QueryRow(dest ...any) error
+
+	// Query 执行 SQL 并返回 Rows (用于列表查询)
+	Query() (*sql.Rows, error)
 }
 
 // ComputeFunc 周期性写计算函数

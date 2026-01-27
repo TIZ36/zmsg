@@ -9,6 +9,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/go-redis/redis/v8"
 	_ "github.com/lib/pq"
 	"github.com/tiz36/zmsg/zmsg"
 )
@@ -27,7 +28,7 @@ func InitEnv() {
 		// 使用环境变量或默认值
 		cfg.Postgres.DSN = getenv("TEST_POSTGRES_DSN", "postgresql://postgres:postgres@localhost/zmsg_test?sslmode=disable")
 		cfg.Redis.Addr = getenv("TEST_REDIS_ADDR", "localhost:6379")
-		cfg.Redis.Password = getenv("TEST_REDIS_PASSWORD", "123456")
+		cfg.Redis.Password = getenv("TEST_REDIS_PASSWORD", "chatee_redis")
 		cfg.Queue.Addr = getenv("TEST_QUEUE_ADDR", cfg.Redis.Addr)
 		cfg.Queue.Password = cfg.Redis.Password
 		cfg.Log.Level = "warn" // 测试时减少日志
@@ -103,82 +104,26 @@ func InitSchema(t *testing.T, zm zmsg.ZMsg) {
 	schemaOnce.Do(func() {
 		ctx := context.Background()
 
-		// 创建测试表
-		schema := `
--- 测试用 feeds 表
-CREATE TABLE IF NOT EXISTS test_feeds (
-    id VARCHAR(64) PRIMARY KEY,
-    user_id VARCHAR(64),
-    content TEXT,
-    like_count INTEGER DEFAULT 0,
-    repost_count INTEGER DEFAULT 0,
-    status VARCHAR(32) DEFAULT 'active',
-    tags JSONB DEFAULT '[]'::jsonb,
-    extra JSONB DEFAULT '{}'::jsonb,
-    created_at TIMESTAMP DEFAULT NOW(),
-    updated_at TIMESTAMP DEFAULT NOW()
-);
+		// 读取 schema.sql
+		// 尝试多个路径以兼容不同的测试运行方式
+		paths := []string{
+			"sql/schema.sql",       // from tests/
+			"tests/sql/schema.sql", // from root
+			"../sql/schema.sql",    // from tests/testutil
+		}
+		var content []byte
+		var err error
+		for _, p := range paths {
+			content, err = os.ReadFile(p)
+			if err == nil {
+				break
+			}
+		}
+		if err != nil {
+			t.Fatalf("failed to read schema.sql: %v", err)
+		}
 
--- 测试用 feed_meta 表（计数器聚合测试）
-CREATE TABLE IF NOT EXISTS feed_meta (
-    id VARCHAR(64) PRIMARY KEY,
-    like_count INTEGER DEFAULT 0,
-    repost_count INTEGER DEFAULT 0,
-    view_count INTEGER DEFAULT 0,
-    score NUMERIC DEFAULT 0,
-    tags JSONB DEFAULT '[]'::jsonb,
-    extra JSONB DEFAULT '{}'::jsonb,
-    created_at TIMESTAMP DEFAULT NOW(),
-    updated_at TIMESTAMP DEFAULT NOW()
-);
-
--- 测试用 feed_reply_meta 表
-CREATE TABLE IF NOT EXISTS feed_reply_meta (
-    id VARCHAR(64) PRIMARY KEY,
-    type VARCHAR(32) DEFAULT 'feed',
-    visibility VARCHAR(32) DEFAULT 'public',
-    topic VARCHAR(255),
-    is_repostable BOOLEAN DEFAULT true,
-    is_original BOOLEAN DEFAULT true,
-    like_count INTEGER DEFAULT 0,
-    repost_count INTEGER DEFAULT 0,
-    tags JSONB DEFAULT '[]'::jsonb,
-    extra JSONB DEFAULT '{}'::jsonb,
-    created_at TIMESTAMP DEFAULT NOW(),
-    updated_at TIMESTAMP DEFAULT NOW()
-);
-
--- 测试用 replies 表
-CREATE TABLE IF NOT EXISTS replies (
-    id VARCHAR(64) PRIMARY KEY,
-    feed_id VARCHAR(64),
-    user_id VARCHAR(64),
-    content TEXT,
-    created_at TIMESTAMP DEFAULT NOW()
-);
-
--- 测试用 likes 表（唯一约束测试）
-CREATE TABLE IF NOT EXISTS likes (
-    user_id VARCHAR(64) NOT NULL,
-    feed_id VARCHAR(64) NOT NULL,
-    created_at TIMESTAMP DEFAULT NOW(),
-    PRIMARY KEY (user_id, feed_id)
-);
-
--- 测试用 reply_likes 表
-CREATE TABLE IF NOT EXISTS reply_likes (
-    reply_id VARCHAR(64) NOT NULL,
-    user_id VARCHAR(64) NOT NULL,
-    created_at TIMESTAMP DEFAULT NOW(),
-    PRIMARY KEY (reply_id, user_id)
-);
-
--- 创建索引
-CREATE INDEX IF NOT EXISTS idx_test_feeds_user_id ON test_feeds(user_id);
-CREATE INDEX IF NOT EXISTS idx_test_feeds_status ON test_feeds(status);
-CREATE INDEX IF NOT EXISTS idx_replies_feed_id ON replies(feed_id);
-`
-		err := zm.LoadSQL(schema).Migrate(ctx)
+		err = zm.LoadSQL(string(content)).Migrate(ctx)
 		if err != nil {
 			t.Fatalf("failed to init schema: %v", err)
 		}
@@ -187,41 +132,73 @@ CREATE INDEX IF NOT EXISTS idx_replies_feed_id ON replies(feed_id);
 
 // CleanupTable 清理指定表的测试数据
 func CleanupTable(t *testing.T, zm zmsg.ZMsg, table string, whereClause string, args ...interface{}) {
-	ctx := context.Background()
-	task := zmsg.SQL("DELETE FROM "+table+" WHERE "+whereClause, args...)
-	_, err := zm.SQLExec(ctx, task)
+	_, err := zm.SQL("DELETE FROM "+table+" WHERE "+whereClause, args...).Exec()
 	if err != nil {
 		t.Logf("cleanup table %s failed: %v", table, err)
 	}
 }
 
+// CleanupRedis 清理 Redis 数据 (包括 Asynq 队列)
+func CleanupRedis(t *testing.T) {
+	cfg := NewConfig()
+	rdb := redis.NewClient(&redis.Options{
+		Addr:     cfg.Redis.Addr,
+		Password: cfg.Redis.Password,
+		DB:       cfg.Redis.DB,
+	})
+	defer rdb.Close()
+
+	ctx := context.Background()
+	if err := rdb.FlushDB(ctx).Err(); err != nil {
+		if t != nil {
+			t.Logf("flush redis failed: %v", err)
+		} else {
+			fmt.Printf("flush redis failed: %v\n", err)
+		}
+	}
+}
+
 // CleanupAllTables 清理所有测试表数据
 func CleanupAllTables(t *testing.T, zm zmsg.ZMsg) {
-	ctx := context.Background()
-	tables := []string{
-		"test_feeds",
-		"feed_meta",
-		"feed_reply_meta",
-		"replies",
-		"likes",
-		"reply_likes",
+	CleanupRedis(t) // 同时也清理 Redis
+
+	paths := []string{
+		"sql/clear.sql",       // from tests/
+		"tests/sql/clear.sql", // from root
+		"../sql/clear.sql",    // from tests/testutil
 	}
-	for _, table := range tables {
-		task := zmsg.SQL("TRUNCATE TABLE " + table + " CASCADE")
-		_, err := zm.SQLExec(ctx, task)
-		if err != nil {
-			t.Logf("truncate table %s failed: %v", table, err)
+	var content []byte
+	var err error
+	for _, p := range paths {
+		content, err = os.ReadFile(p)
+		if err == nil {
+			break
+		}
+	}
+	if err != nil {
+		if t != nil {
+			t.Fatalf("failed to read clear.sql: %v", err)
+		} else {
+			panic(fmt.Sprintf("failed to read clear.sql: %v", err))
+		}
+	}
+
+	_, err = zm.SQL(string(content)).Exec()
+	if err != nil {
+		if t != nil {
+			t.Logf("cleanup all tables failed: %v", err)
+		} else {
+			fmt.Printf("cleanup all tables failed: %v\n", err)
 		}
 	}
 }
 
 // InsertTestFeed 插入测试 feed 数据
 func InsertTestFeed(t *testing.T, zm zmsg.ZMsg, id, content string) {
-	ctx := context.Background()
-	task := zmsg.SQL("INSERT INTO test_feeds (id, content) VALUES (?, ?)", id, content).
-		OnConflict("id").
-		DoUpdate("content")
-	_, err := zm.SQLExec(ctx, task)
+	err := zm.Table("feeds").CacheKey(id).Save(struct {
+		ID      string `db:"id,pk"`
+		Content string `db:"content"`
+	}{ID: id, Content: content})
 	if err != nil {
 		t.Fatalf("insert test feed failed: %v", err)
 	}
@@ -229,11 +206,9 @@ func InsertTestFeed(t *testing.T, zm zmsg.ZMsg, id, content string) {
 
 // InsertFeedMeta 插入 feed_meta 测试数据
 func InsertFeedMeta(t *testing.T, zm zmsg.ZMsg, id string) {
-	ctx := context.Background()
-	task := zmsg.SQL("INSERT INTO feed_meta (id) VALUES (?)", id).
-		OnConflict("id").
-		DoNothing()
-	_, err := zm.SQLExec(ctx, task)
+	err := zm.Table("feed_meta").CacheKey("meta:" + id).Save(struct {
+		ID string `db:"id,pk"`
+	}{ID: id})
 	if err != nil {
 		t.Fatalf("insert feed_meta failed: %v", err)
 	}
@@ -241,11 +216,10 @@ func InsertFeedMeta(t *testing.T, zm zmsg.ZMsg, id string) {
 
 // InsertFeedReplyMeta 插入 feed_reply_meta 测试数据
 func InsertFeedReplyMeta(t *testing.T, zm zmsg.ZMsg, id, metaType string) {
-	ctx := context.Background()
-	task := zmsg.SQL("INSERT INTO feed_reply_meta (id, type) VALUES (?, ?)", id, metaType).
-		OnConflict("id").
-		DoNothing()
-	_, err := zm.SQLExec(ctx, task)
+	err := zm.Table("feed_reply_meta").CacheKey("meta:" + id).Save(struct {
+		ID   string `db:"id,pk"`
+		Type string `db:"type"`
+	}{ID: id, Type: metaType})
 	if err != nil {
 		t.Fatalf("insert feed_reply_meta failed: %v", err)
 	}

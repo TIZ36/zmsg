@@ -260,7 +260,7 @@ func (b *BloomFilter) syncLoop(ctx context.Context) {
 		select {
 		case <-ctx.Done():
 			// 退出前保存一次
-			b.saveToRedis(context.Background())
+			_ = b.saveToRedis(context.Background())
 			return
 
 		case <-ticker.C:
@@ -278,7 +278,7 @@ func (b *BloomFilter) Close() {
 	if b.cancel != nil {
 		b.cancel()
 	}
-	b.saveToRedis(context.Background())
+	_ = b.saveToRedis(context.Background())
 }
 
 type localCacheEntry struct {

@@ -149,14 +149,10 @@ func DefaultConfig() Config {
 		Queue: QueueConfig{
 			DB:          1,
 			Concurrency: 10,
-			Queues: map[string]int{
-				"critical": 6,
-				"default":  3,
-				"low":      1,
-			},
-			RetryMax:   3,
-			RetryDelay: 5 * time.Second,
-			TaskDelay:  0, // 默认立即执行
+			Queues:      map[string]int{"critical": 6, "default": 3, "low": 1, "serial_0": 1, "serial_1": 1, "serial_2": 1, "serial_3": 1, "serial_4": 1, "serial_5": 1, "serial_6": 1, "serial_7": 1, "serial_8": 1, "serial_9": 1, "serial_10": 1, "serial_11": 1, "serial_12": 1, "serial_13": 1, "serial_14": 1, "serial_15": 1},
+			RetryMax:    3,
+			RetryDelay:  5 * time.Second,
+			TaskDelay:   0, // 默认立即执行
 		},
 		Cache: CacheConfig{
 			BloomEnabled:                false,
@@ -262,11 +258,14 @@ func (c *Config) Validate() error {
 	if c.Queue.Concurrency <= 0 {
 		c.Queue.Concurrency = 10
 	}
-	if c.Queue.Queues == nil || len(c.Queue.Queues) == 0 {
+	if len(c.Queue.Queues) == 0 {
 		c.Queue.Queues = map[string]int{
 			"critical": 6,
 			"default":  3,
 			"low":      1,
+		}
+		for i := 0; i < 16; i++ {
+			c.Queue.Queues[fmt.Sprintf("serial_%d", i)] = 1
 		}
 	}
 	// Bloom enabled by default if not specified (though yaml unmarshal into bool is false by default, we rely on DefaultConfig)

@@ -1,12 +1,14 @@
 // benchplot - 从 Go benchmark 输出生成 SVG 折线图
 //
 // 用法:
-//   go test -bench=. ./tests/ -benchmem | go run ./tests/tools/benchplot/main.go
-//   go test -bench=. ./tests/ -benchmem > bench.txt && go run ./tests/tools/benchplot/main.go < bench.txt
+//
+//	go test -bench=. ./tests/ -benchmem | go run ./tests/tools/benchplot/main.go
+//	go test -bench=. ./tests/ -benchmem > bench.txt && go run ./tests/tools/benchplot/main.go < bench.txt
 //
 // 输出:
-//   bench_report.svg - 性能图表
-//   bench_report.md  - Markdown 报告
+//
+//	bench_report.svg - 性能图表
+//	bench_report.md  - Markdown 报告
 package main
 
 import (
@@ -21,10 +23,10 @@ import (
 )
 
 type BenchResult struct {
-	Name       string
-	Iterations int64
-	NsPerOp    float64
-	BytesPerOp int64
+	Name        string
+	Iterations  int64
+	NsPerOp     float64
+	BytesPerOp  int64
 	AllocsPerOp int64
 }
 
@@ -186,7 +188,7 @@ func generateSVG(results []BenchResult, filename string) {
 	svg.WriteString("</svg>")
 
 	// 写入文件
-	os.WriteFile(filename, []byte(svg.String()), 0644)
+	_ = os.WriteFile(filename, []byte(svg.String()), 0644)
 }
 
 func generateMarkdown(results []BenchResult, filename string) {
@@ -197,11 +199,11 @@ func generateMarkdown(results []BenchResult, filename string) {
 
 	// 按类别分组
 	categories := map[string][]BenchResult{
-		"SQL Builder":    {},
-		"Cache":          {},
-		"ID":             {},
-		"PeriodicStore":  {},
-		"JSON":           {},
+		"SQL Builder":   {},
+		"Cache":         {},
+		"ID":            {},
+		"PeriodicStore": {},
+		"JSON":          {},
 	}
 
 	for _, r := range results {
@@ -276,7 +278,7 @@ func generateMarkdown(results []BenchResult, filename string) {
 	}
 
 	// 写入文件
-	os.WriteFile(filename, []byte(md.String()), 0644)
+	_ = os.WriteFile(filename, []byte(md.String()), 0644)
 }
 
 func formatNs(ns float64) string {

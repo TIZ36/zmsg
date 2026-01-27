@@ -4,7 +4,6 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
-	"sync"
 	"time"
 
 	_ "github.com/lib/pq"
@@ -14,7 +13,6 @@ import (
 type PostgresStorage struct {
 	db      *sql.DB
 	ownedDB bool // 是否拥有 DB 连接（用于 Close 时判断是否关闭）
-	mu      sync.RWMutex
 }
 
 // NewPostgresStorage 创建PostgreSQL存储（创建新连接）
@@ -102,7 +100,9 @@ func (s *PostgresStorage) RegisterNode(ctx context.Context, node *NodeInfo) (int
 	if err != nil {
 		return 0, fmt.Errorf("failed to begin transaction: %w", err)
 	}
-	defer tx.Rollback()
+	defer func() {
+		_ = tx.Rollback()
+	}()
 
 	// 首先清理过期节点
 	if _, err := tx.ExecContext(ctx, `

@@ -38,7 +38,7 @@ docker-down:
 
 # Benchmark
 benchmark:
-	go test -bench=. -benchmem ./tests/
+	go test -bench=. -benchmem -run=^$$ ./tests/
 
 # Run benchmark tests and save results
 bench:
@@ -46,7 +46,7 @@ bench:
 	@TIMESTAMP=$$(date +%Y%m%d_%H%M%S); \
 	BENCH_FILE="tests/reports/bench_$$TIMESTAMP.txt"; \
 	echo "=== Running benchmarks ==="; \
-	go test -bench=. -benchmem -benchtime=2s ./tests/ 2>&1 | tee $$BENCH_FILE; \
+	go test -bench=. -benchmem -benchtime=2s -run=^$$ ./tests/ 2>&1 | tee $$BENCH_FILE; \
 	echo ""; \
 	echo "Benchmark results saved to: $$BENCH_FILE"; \
 	ln -sf "bench_$$TIMESTAMP.txt" tests/reports/latest.txt

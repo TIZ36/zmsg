@@ -13,35 +13,40 @@ import (
 
 // 任务类型常量
 const (
-	TypeSave   = "zmsg:save"
-	TypeDelete = "zmsg:delete"
-	TypeUpdate = "zmsg:update"
+	TypeSave        = "zmsg:save"
+	TypeDelete      = "zmsg:delete"
+	TypeUpdate      = "zmsg:update"
 	TypeCacheRepair = "zmsg:cache_repair"
 )
 
 // Config 队列配置
 type Config struct {
-	RedisAddr     string
-	RedisPassword string
-	RedisDB       int
-	Concurrency   int           // 并发 worker 数
-	Queues        map[string]int // 队列权重
-	RetryMax      int           // 最大重试次数
-	RetryDelay    time.Duration // 重试延迟
-	TaskDelay     time.Duration // 任务延迟执行时间
+	RedisAddr                        string
+	RedisPassword                    string
+	RedisDB                          int
+	Concurrency                      int            // 并发 worker 数
+	Queues                           map[string]int // 队列权重
+	RetryMax                         int            // 最大重试次数
+	RetryDelay                       time.Duration  // 重试延迟
+	TaskDelay                        time.Duration  // 任务延迟执行时间
 	FallbackToSyncStoreOnEnqueueFail bool
 }
 
 // DefaultConfig 默认配置
 func DefaultConfig() *Config {
+	queues := map[string]int{
+		"critical": 6,
+		"default":  3,
+		"low":      1,
+	}
+	for i := 0; i < 16; i++ {
+		queues[fmt.Sprintf("serial_%d", i)] = 1
+	}
+
 	return &Config{
 		RedisAddr:   "localhost:6379",
 		Concurrency: 10,
-		Queues: map[string]int{
-			"critical": 6,
-			"default":  3,
-			"low":      1,
-		},
+		Queues:      queues,
 		RetryMax:    3,
 		RetryDelay:  time.Second * 5,
 	}
@@ -49,13 +54,13 @@ func DefaultConfig() *Config {
 
 // Queue 基于 asynq 的异步队列
 type Queue struct {
-	client *asynq.Client
-	server *asynq.Server
-	mux    *asynq.ServeMux
-	config *Config
+	client   *asynq.Client
+	server   *asynq.Server
+	mux      *asynq.ServeMux
+	config   *Config
 	redisOpt asynq.RedisClientOpt
-	stats *Stats
-	mu    sync.Mutex
+	stats    *Stats
+	mu       sync.Mutex
 }
 
 // New 创建队列
@@ -63,7 +68,7 @@ func New(cfg *Config) (*Queue, error) {
 	if cfg == nil {
 		cfg = DefaultConfig()
 	}
-	if cfg.Queues == nil || len(cfg.Queues) == 0 {
+	if len(cfg.Queues) == 0 {
 		cfg.Queues = DefaultConfig().Queues
 	}
 
@@ -84,12 +89,12 @@ func New(cfg *Config) (*Queue, error) {
 	})
 
 	return &Queue{
-		client: client,
-		server: server,
-		mux:    asynq.NewServeMux(),
-		config: cfg,
+		client:   client,
+		server:   server,
+		mux:      asynq.NewServeMux(),
+		config:   cfg,
 		redisOpt: redisOpt,
-		stats:  &Stats{},
+		stats:    &Stats{},
 	}, nil
 }
 
@@ -122,6 +127,45 @@ func (q *Queue) EnqueueUpdate(ctx context.Context, payload *TaskPayload, opts ..
 // EnqueueCacheRepair 入队缓存修复任务
 func (q *Queue) EnqueueCacheRepair(ctx context.Context, payload *TaskPayload, opts ...asynq.Option) error {
 	return q.enqueue(ctx, TypeCacheRepair, payload, opts...)
+}
+
+func (q *Queue) EnqueueSerial(ctx context.Context, serialKey string, payload *TaskPayload, opts ...asynq.Option) error {
+	if payload.CreatedAt.IsZero() {
+		payload.CreatedAt = time.Now()
+	}
+
+	// 使用一致性哈希或简单的取模路由到序列化分片
+	// 假设我们有 16 个序列化队列 serial_0 ... serial_15
+	// 每个队列在 Server 端应该配置为 Concurrency: 1 (如果需要严格顺序)
+	shard := fnv32(serialKey) % 16
+	queueName := fmt.Sprintf("serial_%d", shard)
+
+	opts = append(opts, asynq.Queue(queueName))
+
+	atomic.AddInt64(&q.stats.EnqueueTotal, 1)
+	data, err := json.Marshal(payload)
+	if err != nil {
+		atomic.AddInt64(&q.stats.EnqueueFailed, 1)
+		return fmt.Errorf("failed to marshal payload: %w", err)
+	}
+
+	task := asynq.NewTask(TypeSave, data, opts...)
+	_, err = q.client.EnqueueContext(ctx, task)
+	if err != nil {
+		atomic.AddInt64(&q.stats.EnqueueFailed, 1)
+		return fmt.Errorf("failed to enqueue serial task: %w", err)
+	}
+
+	return nil
+}
+
+func fnv32(key string) uint32 {
+	hash := uint32(2166136261)
+	for i := 0; i < len(key); i++ {
+		hash *= 16777619
+		hash ^= uint32(key[i])
+	}
+	return hash
 }
 
 func (q *Queue) enqueue(ctx context.Context, taskType string, payload *TaskPayload, opts ...asynq.Option) error {
@@ -197,7 +241,7 @@ func (q *Queue) UpdateConfig(cfg *Config) error {
 	if cfg == nil {
 		return nil
 	}
-	if cfg.Queues == nil || len(cfg.Queues) == 0 {
+	if len(cfg.Queues) == 0 {
 		cfg.Queues = q.config.Queues
 	}
 

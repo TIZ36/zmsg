@@ -156,7 +156,9 @@ func (m *Migration) MigrateWithTx(ctx context.Context) error {
 	if err != nil {
 		return fmt.Errorf("failed to begin transaction: %w", err)
 	}
-	defer tx.Rollback()
+	defer func() {
+		_ = tx.Rollback()
+	}()
 
 	for i, sqlStmt := range m.sqls {
 		if _, err := tx.ExecContext(ctx, sqlStmt); err != nil {

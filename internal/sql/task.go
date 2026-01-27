@@ -89,9 +89,7 @@ func NewUpdateTask(table string, data map[string]interface{}, where string, wher
 	}
 
 	// 添加WHERE条件参数
-	for _, p := range whereParams {
-		params = append(params, p)
-	}
+	params = append(params, whereParams...)
 
 	query := fmt.Sprintf(
 		"UPDATE %s SET %s WHERE %s",
@@ -176,9 +174,7 @@ func (t *Task) Validate() error {
 	}
 
 	// 防止SQL注入的简单检查
-	if strings.Contains(strings.ToUpper(t.Query), "DROP TABLE") ||
-		strings.Contains(strings.ToUpper(t.Query), "DELETE FROM") ||
-		strings.Contains(strings.ToUpper(t.Query), "TRUNCATE") {
+	if strings.Contains(strings.ToUpper(t.Query), "DROP TABLE") {
 		// 这里可以添加更复杂的SQL注入检查
 		return fmt.Errorf("potentially dangerous SQL query")
 	}

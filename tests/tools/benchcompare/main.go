@@ -1,10 +1,12 @@
 // benchcompare - 比较多个 benchmark 报告并生成趋势图
 //
 // 用法:
-//   go run ./tests/tools/benchcompare/main.go ./tests/reports/bench_*.txt
+//
+//	go run ./tests/tools/benchcompare/main.go ./tests/reports/bench_*.txt
 //
 // 输出:
-//   bench_trend.svg - 性能趋势图（类似 git 提交历史图）
+//
+//	bench_trend.svg - 性能趋势图（类似 git 提交历史图）
 package main
 
 import (
@@ -293,7 +295,7 @@ func generateTrendSVG(reports []BenchReport, filename string) {
 	}
 
 	svg.WriteString("</svg>")
-	os.WriteFile(filename, []byte(svg.String()), 0644)
+	_ = os.WriteFile(filename, []byte(svg.String()), 0644)
 }
 
 func generateCompareMarkdown(reports []BenchReport, filename string) {
@@ -363,7 +365,7 @@ func generateCompareMarkdown(reports []BenchReport, filename string) {
 		md.WriteString("\n")
 	}
 
-	os.WriteFile(filename, []byte(md.String()), 0644)
+	_ = os.WriteFile(filename, []byte(md.String()), 0644)
 }
 
 func formatNs(ns float64) string {

@@ -16,27 +16,6 @@ func WithConsistency(c Consistency) Option {
 	}
 }
 
-// WithSyncPersist 设置同步持久化
-func WithSyncPersist() Option {
-	return func(o *Options) {
-		o.SyncPersist = true
-	}
-}
-
-// WithPriority 设置优先级
-func WithPriority(p int) Option {
-	return func(o *Options) {
-		o.Priority = p
-	}
-}
-
-// WithTags 设置标签
-func WithTags(tags ...string) Option {
-	return func(o *Options) {
-		o.Tags = tags
-	}
-}
-
 // WithAsyncDelay 设置 asynq 任务延迟时间
 func WithAsyncDelay(delay time.Duration) Option {
 	return func(o *Options) {
@@ -49,9 +28,7 @@ func buildOptions(opts ...Option) Options {
 	o := Options{
 		TTL:         24 * time.Hour,
 		Consistency: ConsistencyEventual,
-		SyncPersist: false,
-		Priority:    0,
-		AsyncDelay:  0, // 默认立即执行
+		AsyncDelay:  0,
 	}
 	for _, opt := range opts {
 		opt(&o)

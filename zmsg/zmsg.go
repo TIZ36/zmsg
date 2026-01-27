@@ -86,6 +86,23 @@ func New(ctx context.Context, cfg Config) (ZMsg, error) {
 	return z, nil
 }
 
+// Table 实现 ZMsg 接口
+func (z *zmsg) Table(name string) TableBuilder {
+	return &tableBuilder{
+		z:     z,
+		table: name,
+	}
+}
+
+// SQL 实现 ZMsg 接口
+func (z *zmsg) SQL(query string, args ...any) SQLBuilder {
+	return &sqlBuilder{
+		z:     z,
+		query: convertPlaceholders(query),
+		args:  args,
+	}
+}
+
 // initComponents 初始化所有组件
 func (z *zmsg) initComponents(ctx context.Context) error {
 	var err error
@@ -204,32 +221,8 @@ func (z *zmsg) startBackgroundWorkers(ctx context.Context) {
 
 // ========== 核心接口实现 ==========
 
-// CacheOnly 仅缓存
-func (z *zmsg) CacheOnly(ctx context.Context, key string, value []byte, opts ...Option) error {
-	z.checkClosed()
-	start := time.Now()
-	defer func() {
-		if z.metrics != nil {
-			z.metrics.recordWriteLatency(time.Since(start))
-		}
-	}()
-
-	options := buildOptions(opts...)
-	ttl := options.TTL
-	if ttl == 0 {
-		ttl = z.config.DefaultTTL
-	}
-
-	// 更新 L1 和 L2 缓存
-	if err := z.updateCache(ctx, key, value, ttl); err != nil {
-		return wrapError("CACHE_FAILED", "cache only failed", err)
-	}
-
-	return nil
-}
-
-// CacheAndStore 缓存并立即存储
-func (z *zmsg) CacheAndStore(ctx context.Context, key string, value []byte,
+// cacheAndStore 缓存并立即存储
+func (z *zmsg) cacheAndStore(ctx context.Context, key string, value []byte,
 	sqlTask *SQLTask, opts ...Option) (string, error) {
 
 	z.checkClosed()
@@ -259,7 +252,7 @@ func (z *zmsg) CacheAndStore(ctx context.Context, key string, value []byte,
 	if err != nil {
 		z.logger.Debug("[DB] exec failed", "key", key, "error", err)
 		// 存储失败，清理缓存
-		z.delCache(ctx, key)
+		_ = z.delCache(ctx, key)
 		return "", wrapError("STORE_FAILED", "store failed", err)
 	}
 	z.logger.Debug("[DB] exec success", "key", key, "lastInsertID", result.LastInsertID, "rowsAffected", result.RowsAffected)
@@ -273,8 +266,8 @@ func (z *zmsg) CacheAndStore(ctx context.Context, key string, value []byte,
 }
 
 // CacheAndAsyncStore 缓存并 Asynq 延迟存储
-// CacheAndDelayStore 缓存并延迟存储（asynq 延迟队列）
-func (z *zmsg) CacheAndDelayStore(ctx context.Context, key string, value []byte,
+// cacheAndDelayStore 缓存并延迟存储（asynq 延迟队列）
+func (z *zmsg) cacheAndDelayStore(ctx context.Context, key string, value []byte,
 	sqlTask *SQLTask, opts ...Option) error {
 
 	z.checkClosed()
@@ -318,14 +311,22 @@ func (z *zmsg) CacheAndDelayStore(ctx context.Context, key string, value []byte,
 	}
 
 	z.logger.Debug("[Asynq] enqueue task", "key", key, "delay", delay, "query", sqlTask.Query)
-	if err := z.queue.EnqueueSave(ctx, payload, asynqOpts...); err != nil {
+
+	var enqueueErr error
+	if sqlTask.SerializeKey != "" {
+		enqueueErr = z.queue.EnqueueSerial(ctx, sqlTask.SerializeKey, payload, asynqOpts...)
+	} else {
+		enqueueErr = z.queue.EnqueueSave(ctx, payload, asynqOpts...)
+	}
+
+	if err := enqueueErr; err != nil {
 		z.logger.Debug("[Asynq] enqueue failed", "key", key, "error", err)
 		z.metrics.recordQueueEnqueueFailure()
 		if z.config.Queue.FallbackToSyncStoreOnEnqueueFail {
 			z.logger.Warn("[Asynq] enqueue failed, fallback to sync store", "key", key)
 			task := convertSQLTask(sqlTask)
 			if _, execErr := z.sqlExec.Execute(ctx, task); execErr != nil {
-				z.delCache(ctx, key)
+				_ = z.delCache(ctx, key)
 				return wrapError("STORE_FAILED", "fallback store failed", execErr)
 			}
 			return nil
@@ -344,7 +345,9 @@ func (z *zmsg) CacheAndDelayStore(ctx context.Context, key string, value []byte,
 //   - TaskTypeCounter: 内存累加聚合（多次 Inc/Dec 合并为一次 SQL）
 //   - TaskTypeAppend: Slice 内存聚合（多次 Add/Del 合并为一次批量操作）
 //   - TaskTypePut: Map 内存聚合（多次 Set/Del 合并为一次批量操作）
-func (z *zmsg) CacheAndPeriodicStore(ctx context.Context, key string, value []byte,
+//
+// cacheAndPeriodicStore 缓存并周期存储（内存聚合 + 定时 flush）
+func (z *zmsg) cacheAndPeriodicStore(ctx context.Context, key string, value []byte,
 	sqlTask *SQLTask, opts ...Option) error {
 
 	z.checkClosed()
@@ -355,7 +358,14 @@ func (z *zmsg) CacheAndPeriodicStore(ctx context.Context, key string, value []by
 		}
 	}()
 
-	taskTypeStr := []string{"Content", "Counter", "Slice", "Map"}[sqlTask.TaskType]
+	taskTypes := []string{"Content", "Counter", "Slice", "Map", "Merge"}
+	var taskTypeStr string
+	if int(sqlTask.TaskType) < len(taskTypes) {
+		taskTypeStr = taskTypes[sqlTask.TaskType]
+	} else {
+		taskTypeStr = fmt.Sprintf("Unknown(%d)", sqlTask.TaskType)
+	}
+
 	z.logger.Debug("[CacheAndPeriodicStore] start",
 		"key", key,
 		"taskType", taskTypeStr,
@@ -392,28 +402,19 @@ func (z *zmsg) CacheAndPeriodicStore(ctx context.Context, key string, value []by
 		// Counter 聚合
 		OpType: batch.OpType(sqlTask.OpType),
 		Delta:  sqlTask.Delta,
-
-		// Slice 聚合
-		SliceValue: sqlTask.SliceValue,
-
-		// Map 聚合
-		MapKey:   sqlTask.MapKey,
-		MapValue: sqlTask.MapValue,
 	}
 
 	z.logger.Debug("[Batch] submit task",
 		"batchKey", task.BatchKey,
 		"taskType", taskTypeStr,
-		"delta", task.Delta,
-		"sliceValue", task.SliceValue,
-		"mapKey", task.MapKey)
+		"delta", task.Delta)
 	if err := z.periodicWriter.Submit(task); err != nil {
 		z.logger.Debug("[Batch] submit failed", "batchKey", task.BatchKey, "error", err)
 		if z.config.Queue.FallbackToSyncStoreOnEnqueueFail {
 			z.logger.Warn("[Batch] submit failed, fallback to sync store", "batchKey", task.BatchKey)
 			syncTask := convertSQLTask(sqlTask)
 			if _, execErr := z.sqlExec.Execute(ctx, syncTask); execErr != nil {
-				z.delCache(ctx, key)
+				_ = z.delCache(ctx, key)
 				return wrapError("STORE_FAILED", "fallback store failed", execErr)
 			}
 			return nil
@@ -436,8 +437,8 @@ func (z *zmsg) Del(ctx context.Context, key string) error {
 	return z.delCache(ctx, key)
 }
 
-// DelStore 删除并立即存储
-func (z *zmsg) DelStore(ctx context.Context, key string, sqlTask *SQLTask) error {
+// delStore 删除并立即存储
+func (z *zmsg) delStore(ctx context.Context, key string, sqlTask *SQLTask) error {
 	z.checkClosed()
 	start := time.Now()
 	defer func() {
@@ -453,7 +454,7 @@ func (z *zmsg) DelStore(ctx context.Context, key string, sqlTask *SQLTask) error
 
 	// 2. 删除布隆过滤器记录
 	if z.bloom != nil {
-		z.bloom.Delete(ctx, key)
+		_ = z.bloom.Delete(ctx, key)
 	}
 
 	// 3. 执行 SQL 删除
@@ -466,100 +467,8 @@ func (z *zmsg) DelStore(ctx context.Context, key string, sqlTask *SQLTask) error
 	return nil
 }
 
-// DelDelayStore 删除并延迟存储
-func (z *zmsg) DelDelayStore(ctx context.Context, key string, sqlTask *SQLTask) error {
-	z.checkClosed()
-	start := time.Now()
-	defer func() {
-		if z.metrics != nil {
-			z.metrics.recordWriteLatency(time.Since(start))
-		}
-	}()
-
-	// 1. 删除缓存
-	if err := z.delCache(ctx, key); err != nil {
-		return wrapError("CACHE_FAILED", "delete cache failed", err)
-	}
-
-	// 2. 加入删除队列
-	payload := &queue.TaskPayload{
-		Key:       key,
-		Query:     sqlTask.Query,
-		Params:    sqlTask.Params,
-		CreatedAt: time.Now(),
-	}
-
-	if err := z.queue.EnqueueDelete(ctx, payload); err != nil {
-		z.metrics.recordQueueEnqueueFailure()
-		if z.config.Queue.FallbackToSyncStoreOnEnqueueFail {
-			z.logger.Warn("[Asynq] enqueue delete failed, fallback to sync store", "key", key)
-			task := convertSQLTask(sqlTask)
-			if _, execErr := z.sqlExec.Execute(ctx, task); execErr != nil {
-				return wrapError("STORE_FAILED", "fallback delete failed", execErr)
-			}
-			return nil
-		}
-		return wrapError("QUEUE_FAILED", "enqueue failed", err)
-	}
-	z.metrics.recordQueueEnqueueSuccess()
-
-	return nil
-}
-
-// Update 更新缓存
-func (z *zmsg) Update(ctx context.Context, key string, value []byte) error {
-	z.checkClosed()
-	start := time.Now()
-	defer func() {
-		if z.metrics != nil {
-			z.metrics.recordWriteLatency(time.Since(start))
-		}
-	}()
-
-	// 获取旧的 TTL
-	oldTTL, err := z.getCacheTTL(ctx, key)
-	if err != nil {
-		oldTTL = z.config.DefaultTTL
-	}
-
-	// 更新缓存
-	return z.updateCache(ctx, key, value, oldTTL)
-}
-
-// UpdateStore 更新并立即存储
-func (z *zmsg) UpdateStore(ctx context.Context, key string, value []byte,
-	sqlTask *SQLTask) error {
-
-	z.checkClosed()
-	start := time.Now()
-	defer func() {
-		if z.metrics != nil {
-			z.metrics.recordWriteLatency(time.Since(start))
-		}
-	}()
-
-	// 1. 更新缓存
-	oldTTL, err := z.getCacheTTL(ctx, key)
-	if err != nil {
-		oldTTL = z.config.DefaultTTL
-	}
-
-	if err := z.updateCache(ctx, key, value, oldTTL); err != nil {
-		return wrapError("CACHE_FAILED", "update cache failed", err)
-	}
-
-	// 2. 执行 SQL 更新
-	task := convertSQLTask(sqlTask)
-	_, err = z.sqlExec.Execute(ctx, task)
-	if err != nil {
-		return wrapError("STORE_FAILED", "update store failed", err)
-	}
-
-	return nil
-}
-
-// SQLExec 执行 SQL
-func (z *zmsg) SQLExec(ctx context.Context, sqlTask *SQLTask) (*SQLResult, error) {
+// execSQL 执行 SQL
+func (z *zmsg) execSQL(ctx context.Context, sqlTask *SQLTask) (*SQLResult, error) {
 	z.checkClosed()
 	task := convertSQLTask(sqlTask)
 	result, err := z.sqlExec.Execute(ctx, task)
@@ -572,7 +481,7 @@ func (z *zmsg) SQLExec(ctx context.Context, sqlTask *SQLTask) (*SQLResult, error
 	}, nil
 }
 
-// DBHit 检查 DB 命中（布隆过滤器）
+// DBHit 检查 DB 命中（布隆过滤器实现）
 func (z *zmsg) DBHit(ctx context.Context, key string) bool {
 	z.checkClosed()
 	if z.bloom == nil {
@@ -597,18 +506,12 @@ func (z *zmsg) NextID(ctx context.Context, prefix string) (string, error) {
 	return fmt.Sprintf("%s_%s", prefix, idStr), nil
 }
 
-// Get 查询数据
-func (z *zmsg) Get(ctx context.Context, key string) ([]byte, error) {
+// get 查询数据
+func (z *zmsg) get(ctx context.Context, key string) ([]byte, error) {
 	z.checkClosed()
 
 	// 查询管道：bloom -> L1 -> sf -> L2 -> DB -> 回填
 	return z.queryPipeline(ctx, key)
-}
-
-// Batch 创建批处理操作
-func (z *zmsg) Batch() BatchOperation {
-	z.checkClosed()
-	return newBatchOperation(z)
 }
 
 // Close 关闭 zmsg
@@ -630,6 +533,13 @@ func (z *zmsg) Close() error {
 		z.periodicWriter.Stop()
 	}
 
+	// 必须先关闭队列，等待 worker 完成，因为 worker 依赖 DB
+	if z.queue != nil {
+		if err := z.queue.Close(); err != nil {
+			errs = append(errs, err)
+		}
+	}
+
 	if z.db != nil {
 		if err := z.db.Close(); err != nil {
 			errs = append(errs, err)
@@ -644,12 +554,6 @@ func (z *zmsg) Close() error {
 
 	if z.bloom != nil {
 		z.bloom.Close()
-	}
-
-	if z.queue != nil {
-		if err := z.queue.Close(); err != nil {
-			errs = append(errs, err)
-		}
 	}
 
 	// 关闭批处理管理器（如果需要）
@@ -709,7 +613,7 @@ func (z *zmsg) updateCacheWithPolicy(ctx context.Context, key string, value []by
 
 	// 更新布隆过滤器
 	if z.bloom != nil {
-		z.bloom.Add(ctx, key)
+		_ = z.bloom.Add(ctx, key)
 		z.logger.Debug("[Bloom] add key", "key", key)
 	}
 
@@ -748,15 +652,6 @@ func (z *zmsg) enqueueCacheRepair(ctx context.Context, key string, value []byte,
 		opts = append(opts, asynq.ProcessIn(z.config.Cache.CompensationDelay))
 	}
 	return z.queue.EnqueueCacheRepair(ctx, payload, opts...)
-}
-
-// getCacheTTL 获取缓存的剩余 TTL
-func (z *zmsg) getCacheTTL(ctx context.Context, key string) (time.Duration, error) {
-	ttl, err := z.l2.TTL(ctx, key).Result()
-	if err != nil {
-		return 0, err
-	}
-	return ttl, nil
 }
 
 // queryPipeline 查询管道
@@ -810,7 +705,9 @@ func (z *zmsg) queryPipeline(ctx context.Context, key string) ([]byte, error) {
 			if err == sql.ErrNoRows {
 				z.logger.Debug("[DB] not found, bloom false positive", "key", key)
 				// 布隆过滤器误判，移除
-				z.bloom.Delete(ctx, key)
+				if z.bloom != nil {
+					_ = z.bloom.Delete(ctx, key)
+				}
 				if z.metrics != nil {
 					z.metrics.recordCacheMiss()
 				}
@@ -822,7 +719,7 @@ func (z *zmsg) queryPipeline(ctx context.Context, key string) ([]byte, error) {
 		z.logger.Debug("[DB] query success", "key", key, "size", len(data))
 
 		// 6. 回填缓存
-		z.updateCache(ctx, key, data, z.config.DefaultTTL)
+		_ = z.updateCache(ctx, key, data, z.config.DefaultTTL)
 		z.logger.Debug("[Cache] backfill from DB", "key", key)
 		z.recordCacheHit("db")
 
@@ -967,99 +864,6 @@ func (z *zmsg) collectMetrics(ctx context.Context) {
 }
 
 // batchOperation 批处理操作实现
-type batchOperation struct {
-	z     *zmsg
-	items []batchItem
-	mu    sync.Mutex
-}
-
-type batchItem struct {
-	op      string
-	key     string
-	value   []byte
-	sqlTask *SQLTask
-	opts    []Option
-}
-
-func newBatchOperation(z *zmsg) BatchOperation {
-	return &batchOperation{
-		z:     z,
-		items: make([]batchItem, 0),
-	}
-}
-
-func (b *batchOperation) CacheOnly(key string, value []byte, opts ...Option) {
-	b.mu.Lock()
-	defer b.mu.Unlock()
-	b.items = append(b.items, batchItem{
-		op:    "cache_only",
-		key:   key,
-		value: value,
-		opts:  opts,
-	})
-}
-
-func (b *batchOperation) CacheAndStore(key string, value []byte, sqlTask *SQLTask, opts ...Option) {
-	b.mu.Lock()
-	defer b.mu.Unlock()
-	b.items = append(b.items, batchItem{
-		op:      "cache_and_store",
-		key:     key,
-		value:   value,
-		sqlTask: sqlTask,
-		opts:    opts,
-	})
-}
-
-func (b *batchOperation) CacheAndDelayStore(key string, value []byte, sqlTask *SQLTask, opts ...Option) {
-	b.mu.Lock()
-	defer b.mu.Unlock()
-	b.items = append(b.items, batchItem{
-		op:      "cache_and_delay_store",
-		key:     key,
-		value:   value,
-		sqlTask: sqlTask,
-		opts:    opts,
-	})
-}
-
-func (b *batchOperation) Execute(ctx context.Context) error {
-	b.mu.Lock()
-	items := make([]batchItem, len(b.items))
-	copy(items, b.items)
-	b.mu.Unlock()
-
-	for _, item := range items {
-		switch item.op {
-		case "cache_only":
-			if err := b.z.CacheOnly(ctx, item.key, item.value, item.opts...); err != nil {
-				return err
-			}
-		case "cache_and_store":
-			if _, err := b.z.CacheAndStore(ctx, item.key, item.value, item.sqlTask, item.opts...); err != nil {
-				return err
-			}
-		case "cache_and_delay_store":
-			if err := b.z.CacheAndDelayStore(ctx, item.key, item.value, item.sqlTask, item.opts...); err != nil {
-				return err
-			}
-		}
-	}
-
-	return nil
-}
-
-func (b *batchOperation) Reset() {
-	b.mu.Lock()
-	defer b.mu.Unlock()
-	b.items = b.items[:0]
-}
-
-func (b *batchOperation) Size() int {
-	b.mu.Lock()
-	defer b.mu.Unlock()
-	return len(b.items)
-}
 
 // MetricsHandler 实现 ZMsg 接口
 func (z *zmsg) MetricsHandler() http.Handler {

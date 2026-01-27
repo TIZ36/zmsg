@@ -161,10 +161,6 @@ func buildZapConfig(cfg Config) zap.Config {
 	// 设置堆栈跟踪级别
 	zapCfg.DisableStacktrace = cfg.DisableStacktrace
 	if !cfg.DisableStacktrace && cfg.StacktraceLevel != "" {
-		stackLevel := parseLevel(cfg.StacktraceLevel)
-		if stackLevel < zapcore.WarnLevel {
-			stackLevel = zapcore.WarnLevel
-		}
 		zapCfg.EncoderConfig.StacktraceKey = "stacktrace"
 	}
 
@@ -318,13 +314,13 @@ func Default() Logger {
 }
 
 // 全局便捷函数
-func Debug(msg string, fields ...interface{}) { defaultLogger.Debug(msg, fields...) }
+func Debug(msg string, fields ...interface{})   { defaultLogger.Debug(msg, fields...) }
 func Debugf(format string, args ...interface{}) { defaultLogger.Debugf(format, args...) }
-func Info(msg string, fields ...interface{})  { defaultLogger.Info(msg, fields...) }
+func Info(msg string, fields ...interface{})    { defaultLogger.Info(msg, fields...) }
 func Infof(format string, args ...interface{})  { defaultLogger.Infof(format, args...) }
-func Warn(msg string, fields ...interface{})  { defaultLogger.Warn(msg, fields...) }
+func Warn(msg string, fields ...interface{})    { defaultLogger.Warn(msg, fields...) }
 func Warnf(format string, args ...interface{})  { defaultLogger.Warnf(format, args...) }
-func Error(msg string, fields ...interface{}) { defaultLogger.Error(msg, fields...) }
+func Error(msg string, fields ...interface{})   { defaultLogger.Error(msg, fields...) }
 func Errorf(format string, args ...interface{}) { defaultLogger.Errorf(format, args...) }
 
 // 兼容 fmt 包的便捷函数

@@ -189,10 +189,9 @@ func (e *Executor) ExecuteBatch(ctx context.Context, tasks []*Task) ([]*Result, 
 		return nil, fmt.Errorf("failed to begin transaction: %w", err)
 	}
 
-	// 确保事务回滚
 	defer func() {
 		if err != nil {
-			tx.Rollback()
+			_ = tx.Rollback()
 		}
 	}()
 

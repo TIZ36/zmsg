@@ -11,7 +11,7 @@ import (
 
 	"github.com/go-redis/redis/v8"
 	_ "github.com/lib/pq"
-	"github.com/tiz36/zmsg/core"
+	zmsg "github.com/tiz36/zmsg/core"
 )
 
 var (

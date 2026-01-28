@@ -26,10 +26,10 @@ func InitEnv() {
 	testConfigOnce.Do(func() {
 		cfg := zmsg.DefaultConfig()
 		// 使用环境变量或默认值
-		cfg.Postgres.DSN = getenv("TEST_POSTGRES_DSN", "postgresql://postgres:postgres@localhost/zmsg_test?sslmode=disable")
-		cfg.Redis.Addr = getenv("TEST_REDIS_ADDR", "localhost:6379")
-		cfg.Redis.Password = getenv("TEST_REDIS_PASSWORD", "chatee_redis")
-		cfg.Queue.Addr = getenv("TEST_QUEUE_ADDR", cfg.Redis.Addr)
+		cfg.Postgres.DSN = getenv("TEST_POSTGRES_DSN", "postgresql://test:test@localhost:5433/test?sslmode=disable")
+		cfg.Redis.Addr = getenv("TEST_REDIS_ADDR", "localhost:6381")
+		cfg.Redis.Password = getenv("TEST_REDIS_PASSWORD", "")
+		cfg.Queue.Addr = getenv("TEST_QUEUE_ADDR", "localhost:6380")
 		cfg.Queue.Password = cfg.Redis.Password
 		cfg.Log.Level = "warn" // 测试时减少日志
 		testConfig = cfg
@@ -46,7 +46,7 @@ func NewConfig() zmsg.Config {
 func EnsureTestDatabase(t *testing.T) {
 	dbInitOnce.Do(func() {
 		// 连接到 postgres 默认数据库来创建测试数据库
-		adminDSN := getenv("TEST_POSTGRES_ADMIN_DSN", "postgresql://postgres:postgres@localhost/postgres?sslmode=disable")
+		adminDSN := getenv("TEST_POSTGRES_ADMIN_DSN", "postgresql://test:test@localhost:5433/postgres?sslmode=disable")
 		db, err := sql.Open("postgres", adminDSN)
 		if err != nil {
 			t.Logf("Warning: cannot connect to admin database: %v", err)

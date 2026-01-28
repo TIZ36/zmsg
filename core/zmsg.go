@@ -508,10 +508,34 @@ func (z *zmsg) NextID(ctx context.Context, prefix string) (string, error) {
 
 // get 查询数据
 func (z *zmsg) get(ctx context.Context, key string) ([]byte, error) {
+	return nil, ErrGetDisabled
+}
+
+// cacheGet 仅查询缓存（L1 + L2），不触达 DB
+func (z *zmsg) cacheGet(ctx context.Context, key string) ([]byte, error) {
 	z.checkClosed()
 
-	// 查询管道：bloom -> L1 -> sf -> L2 -> DB -> 回填
-	return z.queryPipeline(ctx, key)
+	if value, found := z.l1.Get(key); found {
+		z.logger.Debug("[L1] cache HIT", "key", key, "size", len(value.([]byte)))
+		z.recordCacheHit("l1")
+		return value.([]byte), nil
+	}
+	z.logger.Debug("[L1] cache MISS", "key", key)
+
+	value, err := z.l2.Get(ctx, key).Bytes()
+	if err == nil {
+		z.logger.Debug("[L2/Redis] cache HIT", "key", key, "size", len(value))
+		z.l1.Set(key, value, int64(len(value)))
+		z.logger.Debug("[L1] backfill from L2", "key", key)
+		z.recordCacheHit("l2")
+		return value, nil
+	}
+
+	z.logger.Debug("[L2/Redis] cache MISS", "key", key)
+	if z.metrics != nil {
+		z.metrics.recordCacheMiss()
+	}
+	return nil, ErrNotFound
 }
 
 // Close 关闭 zmsg

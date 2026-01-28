@@ -60,6 +60,10 @@ type Feed struct {
     ID      string `db:"id,pk"`
     Content string `db:"content"`
 }
+type User struct {
+    ID    string `db:"id,pk"`
+    Email string `db:"email"`
+}
 
 func main() {
     ctx := context.Background()
@@ -77,8 +81,15 @@ func main() {
     _ = zm.Table("feeds").CacheKey(id).Save(feed)
 
     // 4. Read (Automatic Cache Hit)
-    // Returns JSON bytes, hits L1 cache in ~300ns
-    data, _ := zm.Table("feeds").CacheKey(id).Query()
+    // Scans into dest, hits L1 cache in ~300ns
+    var out Feed
+    _ = zm.Table("feeds").CacheKey(id).Query(&out)
+
+    // 5. SQL Read (CacheKey + Query)
+    var user User
+    _ = zm.SQL("SELECT id, email FROM users WHERE id = ?", "u1").
+        CacheKey("u1").
+        Query(&user)
 }
 ```
 
@@ -128,7 +139,7 @@ The `zm.Table("name")` builder is the entry point for most operations.
 | `Where(cond, args...)` | Custom WHERE clause for SQL generation. |
 | `Save(struct)` | Saves specific struct/map data. |
 | `Del()` | Deletes from cache and DB. |
-| `Query()` | Fetches data (Cache -> DB). |
+| `Query(dest)` | Fetches data into dest (Cache -> DB). |
 
 ### 2. Struct Tag Mapping
 

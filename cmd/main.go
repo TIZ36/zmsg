@@ -2,11 +2,13 @@ package main
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log"
 	"net/http"
 	"os"
 	"os/signal"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"syscall"
@@ -14,7 +16,7 @@ import (
 
 	"github.com/hibiken/asynq"
 	"github.com/hibiken/asynqmon"
-	"github.com/tiz36/zmsg/core"
+	zmsg "github.com/tiz36/zmsg/core"
 )
 
 // ========== 1. 定义业务模型 ==========
@@ -32,6 +34,7 @@ type Thread struct {
 	AuthorID  string    `db:"author_id"`
 	Content   string    `db:"content"`
 	LikeCount int64     `db:"like_count"` // 用于演示聚合计数
+	ReplyCount int64    `db:"reply_count"`
 	Tags      string    `db:"tags"`       // JSONB list
 	CreatedAt time.Time `db:"created_at"`
 }
@@ -102,14 +105,35 @@ func initSchema(ctx context.Context, zm zmsg.ZMsg) {
 		author_id TEXT,
 		content TEXT,
 		like_count BIGINT DEFAULT 0,
+		reply_count BIGINT DEFAULT 0,
 		tags JSONB DEFAULT '[]',
 		created_at TIMESTAMP DEFAULT NOW()
+	);
+	ALTER TABLE threads ADD COLUMN IF NOT EXISTS reply_count BIGINT DEFAULT 0;
+	CREATE TABLE IF NOT EXISTS feeds (
+		id TEXT PRIMARY KEY,
+		user_id BIGINT,
+		content TEXT,
+		like_count BIGINT DEFAULT 0,
+		status TEXT,
+		created_at TIMESTAMP DEFAULT NOW(),
+		updated_at TIMESTAMP DEFAULT NOW()
 	);
 	CREATE TABLE IF NOT EXISTS likes (
 		user_id TEXT,
 		thread_id TEXT,
 		created_at TIMESTAMP DEFAULT NOW(),
 		PRIMARY KEY (user_id, thread_id)
+	);
+	CREATE TABLE IF NOT EXISTS replies (
+		id TEXT PRIMARY KEY,
+		feed_id TEXT,
+		user_id TEXT,
+		parent_id TEXT,
+		content TEXT,
+		seq BIGINT DEFAULT 0,
+		created_at TIMESTAMP DEFAULT NOW(),
+		updated_at TIMESTAMP DEFAULT NOW()
 	);
 	CREATE TABLE IF NOT EXISTS zmsg_data (
 		id TEXT PRIMARY KEY,
@@ -125,6 +149,9 @@ func initSchema(ctx context.Context, zm zmsg.ZMsg) {
 }
 
 func runScenario(ctx context.Context, zm zmsg.ZMsg) {
+	runID := fmt.Sprintf("run_%d", time.Now().UnixNano())
+	runPrefix := "run:" + runID + ":"
+
 	// 场景 A: 创建用户 (同步写)
 	fmt.Println("\n--- [A] Creating Users (Sync) ---")
 	users := make([]*User, 5)
@@ -132,8 +159,9 @@ func runScenario(ctx context.Context, zm zmsg.ZMsg) {
 		uid, _ := zm.NextID(ctx, "user")
 		user := &User{
 			ID:        uid,
-			Name:      fmt.Sprintf("User_%d", i),
+			Name:      fmt.Sprintf("User_%d_%s", i, uid),
 			Balance:   1000,
+			Meta:      "{}",
 			CreatedAt: time.Now(),
 		}
 		if err := zm.Table("users").CacheKey(uid).Save(user); err != nil {
@@ -143,14 +171,37 @@ func runScenario(ctx context.Context, zm zmsg.ZMsg) {
 		fmt.Printf("Created User: %s (Balance: %d)\n", uid, user.Balance)
 	}
 
+	// 场景 A2: 基础查询 (Query(dest))
+	fmt.Println("\n--- [A2] Basic Query (Cache -> DB) ---")
+	var userByID User
+	if err := zm.Table("users").CacheKey(users[0].ID).Query(&userByID); err != nil {
+		log.Printf("Query by ID failed: %v", err)
+	} else {
+		fmt.Printf("Fetched User by ID: %s (%s)\n", userByID.ID, userByID.Name)
+		assertf(userByID.ID == users[0].ID, "user id mismatch: %s != %s", userByID.ID, users[0].ID)
+	}
+	// CacheKey 非主键时，建议加 Where
+	var userByName User
+	if err := zm.Table("users").
+		CacheKey("user_name:"+users[0].Name).
+		Where("name = ?", users[0].Name).
+		Query(&userByName); err != nil {
+		log.Printf("Query by name failed: %v", err)
+	} else {
+		fmt.Printf("Fetched User by name: %s (%s)\n", userByName.ID, userByName.Name)
+		assertf(userByName.ID == users[0].ID, "user name lookup mismatch: %s != %s", userByName.ID, users[0].ID)
+	}
+
 	// 场景 B: 发布帖子 (异步/周期写) -> 提高吞吐
 	fmt.Println("\n--- [B] Creating Threads (Periodic/Override) ---")
 	threadID, _ := zm.NextID(ctx, "thread")
 	thread := &Thread{
 		ID:        threadID,
 		AuthorID:  users[0].ID,
-		Content:   "Hello zmsg world! High performance storage.",
+		Content:   runPrefix + "Hello zmsg world! High performance storage.",
 		LikeCount: 0,
+		ReplyCount: 0,
+		Tags:      "[]",
 		CreatedAt: time.Now(),
 	}
 	// 使用 PeriodicOverride，适合高频发帖场景，后台批量落库
@@ -172,7 +223,7 @@ func runScenario(ctx context.Context, zm zmsg.ZMsg) {
 			// 聚合计数：1000次点击只会产生极少量的 DB UPDATE
 			err := zm.Table("threads").
 				CacheKey(threadID). // L1/L2 缓存 key
-				PeriodicCount(). // 启用计数器聚合策略
+				PeriodicCount().    // 启用计数器聚合策略
 				UpdateColumn().Column("like_count").
 				Do(zmsg.Add(), 1)
 			if err != nil {
@@ -182,6 +233,23 @@ func runScenario(ctx context.Context, zm zmsg.ZMsg) {
 	}
 	wg.Wait()
 	fmt.Printf("Processed %d likes in %v (Requests merged in memory)\n", likeCount, time.Since(start))
+
+	// 等待聚合刷新到 DB
+	if err := waitUntil("like_count", 90*time.Second, 2*time.Second, func() (bool, error) {
+		var threadAfterLikes Thread
+		if err := zm.SQL("SELECT id, author_id, content, like_count, reply_count, tags, created_at FROM threads WHERE id = ?", threadID).
+			Query(&threadAfterLikes); err != nil {
+			if errors.Is(err, zmsg.ErrNotFound) {
+				return false, nil
+			}
+			return false, err
+		}
+		return threadAfterLikes.LikeCount == int64(likeCount), nil
+	}); err != nil {
+		log.Printf("like_count not ready: %v", err)
+	} else {
+		fmt.Printf("like_count validated (%d)\n", likeCount)
+	}
 
 	// 场景 D: 用户信息局部更新 (Deep Merge)
 	fmt.Println("\n--- [D] Partial Updates (Deep Merge) ---")
@@ -202,6 +270,21 @@ func runScenario(ctx context.Context, zm zmsg.ZMsg) {
 	}()
 	wg.Wait()
 	fmt.Println("Merged user meta updates (theme=dark, lang=zh-CN)")
+
+	// 等待合并刷新到 DB
+	if err := waitUntil("user_meta", 30*time.Second, 2*time.Second, func() (bool, error) {
+		var userMeta struct {
+			Meta string `db:"meta"`
+		}
+		if err := zm.SQL("SELECT meta FROM users WHERE id = ?", targetUser).Query(&userMeta); err != nil {
+			return false, err
+		}
+		return strings.Contains(userMeta.Meta, `"theme"`) && strings.Contains(userMeta.Meta, `"lang"`), nil
+	}); err != nil {
+		log.Printf("user meta not ready: %v", err)
+	} else {
+		fmt.Println("user meta validated")
+	}
 
 	// 场景 E: 转账 (分布式锁/序列化)
 	fmt.Println("\n--- [E] Balance Transfer (Distributed Serialization) ---")
@@ -226,20 +309,37 @@ func runScenario(ctx context.Context, zm zmsg.ZMsg) {
 	wg.Wait()
 	fmt.Printf("Executed %d balance deductions safely\n", atomic.LoadInt32(&successCount))
 
-	// 场景 F: 列表查询 (QueryRow Slice Scan)
+	// 校验余额
+	expectedBalance := int64(1000 - balanceOps*10)
+	if err := waitUntil("balance", 10*time.Second, 1*time.Second, func() (bool, error) {
+		var balanceRow struct {
+			Balance int64 `db:"balance"`
+		}
+		if err := zm.SQL("SELECT balance FROM users WHERE id = ?", targetUser).Query(&balanceRow); err != nil {
+			return false, err
+		}
+		return balanceRow.Balance == expectedBalance, nil
+	}); err != nil {
+		log.Printf("balance not ready: %v", err)
+	} else {
+		fmt.Printf("balance validated (%d)\n", expectedBalance)
+	}
+
+	// 场景 F: 列表查询 (Query Slice Scan)
 	fmt.Println("\n--- [F] List Query (Smart Slice Scan) ---")
 	time.Sleep(1 * time.Second) // 等待部分异步写入完成
 
 	var threadList []*Thread
 	// 查询该作者的所有帖子
-	query := "SELECT id, author_id, content, like_count, created_at FROM threads WHERE author_id = ? ORDER BY created_at DESC"
+	query := "SELECT id, author_id, content, like_count, reply_count, created_at FROM threads WHERE author_id = ? ORDER BY created_at DESC"
 
 	// zmsg 自动识别 []*Thread 并执行 Query + Scan
-	err := zm.SQL(query, users[0].ID).QueryRow(&threadList)
+	err := zm.SQL(query, users[0].ID).Query(&threadList)
 	if err != nil {
 		log.Printf("Query list failed: %v", err)
 	} else {
 		fmt.Printf("Found %d threads for user %s\n", len(threadList), users[0].Name)
+		assertf(len(threadList) > 0, "thread list is empty")
 		for _, t := range threadList {
 			// 注意：由于是异步写入，立即查询可能查不到最新的 like_count（最终一致性）
 			// 但 ID 和 Content (PeriodicOverride) 通常较快
@@ -284,16 +384,347 @@ func runScenario(ctx context.Context, zm zmsg.ZMsg) {
 	`
 
 	// 传递外部参数到 SQL 查询
-	err = zm.SQL(joinQuery, minLikes, authorFilter, limit).QueryRow(&joinResults)
+	err = zm.SQL(joinQuery, minLikes, authorFilter, limit).Query(&joinResults)
 	if err != nil {
 		log.Printf("JOIN query failed: %v", err)
 	} else {
 		fmt.Printf("Found %d threads (likes >= %d) by author %s:\n",
 			len(joinResults), minLikes, users[0].Name)
+		assertf(len(joinResults) > 0, "join results empty")
 		for _, r := range joinResults {
 			fmt.Printf(" - Thread[%s] by %s (Balance: %d): %s (Likes: %d)\n",
 				r.ThreadID[:8], r.AuthorName, r.AuthorBalance, r.Content, r.LikeCount)
 		}
+	}
+
+	// 场景 H: 并发写入校验 (Save)
+	fmt.Println("\n--- [H] Concurrent Saves (Assert Count) ---")
+	feedCount := 20
+	var wgs sync.WaitGroup
+	var feedIDs []string
+	var feedMu sync.Mutex
+	for i := 0; i < feedCount; i++ {
+		wgs.Add(1)
+		go func(idx int) {
+			defer wgs.Done()
+			id, _ := zm.NextID(ctx, "feed")
+			feed := Feed{
+				ID:      id,
+				UserID:  int64(100 + idx),
+				Content: fmt.Sprintf("%sfeed_%d", runPrefix, idx),
+				Status:  "active",
+			}
+			if err := zm.Table("feeds").CacheKey(id).Save(feed); err != nil {
+				log.Printf("Failed to save feed: %v", err)
+				return
+			}
+			feedMu.Lock()
+			feedIDs = append(feedIDs, id)
+			feedMu.Unlock()
+		}(i)
+	}
+	wgs.Wait()
+
+	var feedRows []Feed
+	if err := zm.SQL("SELECT id, user_id, content, status, created_at FROM feeds WHERE content LIKE ? ORDER BY created_at DESC", runPrefix+"%").
+		Query(&feedRows); err != nil {
+		log.Printf("Query feeds failed: %v", err)
+	} else {
+		assertf(len(feedRows) == feedCount, "feed count mismatch: %d != %d", len(feedRows), feedCount)
+		fmt.Printf("feed count validated (%d)\n", feedCount)
+	}
+
+	// 场景 I: 删除校验（缓存 + DB）
+	fmt.Println("\n--- [I] Delete Validation ---")
+	deleteCount := 5
+	if deleteCount > len(feedIDs) {
+		deleteCount = len(feedIDs)
+	}
+	for i := 0; i < deleteCount; i++ {
+		if err := zm.Table("feeds").CacheKey(feedIDs[i]).Del(); err != nil {
+			log.Printf("Failed to delete feed: %v", err)
+		}
+		var deleted Feed
+		err := zm.Table("feeds").CacheKey(feedIDs[i]).Query(&deleted)
+		assertf(errors.Is(err, zmsg.ErrNotFound), "deleted feed still exists: %v", err)
+	}
+
+	var remaining []Feed
+	if err := zm.SQL("SELECT id, user_id, content, status, created_at FROM feeds WHERE content LIKE ?", runPrefix+"%").
+		Query(&remaining); err != nil {
+		log.Printf("Query remaining feeds failed: %v", err)
+	} else {
+		expectedRemaining := feedCount - deleteCount
+		assertf(len(remaining) == expectedRemaining, "remaining feed count mismatch: %d != %d", len(remaining), expectedRemaining)
+		fmt.Printf("delete validated (%d removed)\n", deleteCount)
+	}
+
+	// 场景 J: 多列聚合计数（PeriodicCount）
+	fmt.Println("\n--- [J] Multi Counter Aggregation ---")
+	counterThreadID, _ := zm.NextID(ctx, "thread")
+	counterThread := &Thread{
+		ID:         counterThreadID,
+		AuthorID:   users[0].ID,
+		Content:    runPrefix + "counter thread",
+		LikeCount:  0,
+		ReplyCount: 0,
+		Tags:       "[]",
+		CreatedAt:  time.Now(),
+	}
+	if err := zm.Table("threads").CacheKey(counterThreadID).Save(counterThread); err != nil {
+		log.Printf("Failed to create counter thread: %v", err)
+	}
+	likeN := 200
+	replyN := 120
+	var wgCounter sync.WaitGroup
+	for i := 0; i < likeN; i++ {
+		wgCounter.Add(1)
+		go func() {
+			defer wgCounter.Done()
+			_ = zm.Table("threads").CacheKey(counterThreadID).
+				PeriodicCount().UpdateColumn().Column("like_count").
+				Do(zmsg.Add(), 1)
+		}()
+	}
+	for i := 0; i < replyN; i++ {
+		wgCounter.Add(1)
+		go func() {
+			defer wgCounter.Done()
+			_ = zm.Table("threads").CacheKey(counterThreadID).
+				PeriodicCount().UpdateColumn().Column("reply_count").
+				Do(zmsg.Add(), 1)
+		}()
+	}
+	wgCounter.Wait()
+	if err := waitUntil("multi_counter", 60*time.Second, 2*time.Second, func() (bool, error) {
+		var row Thread
+		if err := zm.SQL("SELECT id, like_count, reply_count FROM threads WHERE id = ?", counterThreadID).Query(&row); err != nil {
+			return false, err
+		}
+		return row.LikeCount == int64(likeN) && row.ReplyCount == int64(replyN), nil
+	}); err != nil {
+		log.Printf("multi counter not ready: %v", err)
+	} else {
+		fmt.Printf("multi counter validated (likes=%d, replies=%d)\n", likeN, replyN)
+	}
+
+	// 场景 K: Serialize + PeriodicOverride 叠加
+	fmt.Println("\n--- [K] Serialize + PeriodicOverride ---")
+	overrideThreadID, _ := zm.NextID(ctx, "thread")
+	overrideCount := 10
+	expectedContents := make(map[string]struct{}, overrideCount)
+	var wgOverride sync.WaitGroup
+	for i := 0; i < overrideCount; i++ {
+		wgOverride.Add(1)
+		content := fmt.Sprintf("%soverride_%d", runPrefix, i)
+		expectedContents[content] = struct{}{}
+		go func(c string) {
+			defer wgOverride.Done()
+			_ = zm.Table("threads").CacheKey(overrideThreadID).
+				Serialize(overrideThreadID).
+				PeriodicOverride().
+				Save(&Thread{
+					ID:         overrideThreadID,
+					AuthorID:   users[0].ID,
+					Content:    c,
+					LikeCount:  0,
+					ReplyCount: 0,
+					Tags:       "[]",
+					CreatedAt:  time.Now(),
+				})
+		}(content)
+	}
+	wgOverride.Wait()
+	if err := waitUntil("override_content", 60*time.Second, 2*time.Second, func() (bool, error) {
+		var row Thread
+		if err := zm.SQL("SELECT id, content FROM threads WHERE id = ?", overrideThreadID).Query(&row); err != nil {
+			if errors.Is(err, zmsg.ErrNotFound) {
+				return false, nil
+			}
+			return false, err
+		}
+		_, ok := expectedContents[row.Content]
+		return ok, nil
+	}); err != nil {
+		log.Printf("override content not ready: %v", err)
+	} else {
+		fmt.Println("override content validated")
+	}
+
+	// 场景 L: 并发 Save + Del 交错
+	fmt.Println("\n--- [L] Concurrent Save + Del ---")
+	raceID, _ := zm.NextID(ctx, "feed")
+	_ = zm.Table("feeds").CacheKey(raceID).Save(&Feed{
+		ID:      raceID,
+		UserID:  999,
+		Content: runPrefix + "race_init",
+		Status:  "active",
+	})
+	raceOps := 50
+	var wgRace sync.WaitGroup
+	for i := 0; i < raceOps; i++ {
+		wgRace.Add(1)
+		go func(idx int) {
+			defer wgRace.Done()
+			if idx%2 == 0 {
+				_ = zm.Table("feeds").CacheKey(raceID).Save(&Feed{
+					ID:      raceID,
+					UserID:  999,
+					Content: fmt.Sprintf("%srace_save_%d", runPrefix, idx),
+					Status:  "active",
+				})
+			} else {
+				_ = zm.Table("feeds").CacheKey(raceID).Del()
+			}
+		}(i)
+	}
+	wgRace.Wait()
+	finalContent := runPrefix + "race_final"
+	_ = zm.Table("feeds").CacheKey(raceID).Save(&Feed{
+		ID:      raceID,
+		UserID:  999,
+		Content: finalContent,
+		Status:  "active",
+	})
+	var finalFeed Feed
+	if err := zm.Table("feeds").CacheKey(raceID).Query(&finalFeed); err != nil {
+		log.Printf("race final query failed: %v", err)
+	} else {
+		assertf(finalFeed.Content == finalContent, "race final content mismatch: %s != %s", finalFeed.Content, finalContent)
+		fmt.Println("save+del race validated")
+	}
+
+	// 场景 M: SQL Query + CacheKey + 标量扫描
+	fmt.Println("\n--- [M] SQL Cache Query (Scalar Scan) ---")
+	var threadTotal int64
+	countKey := "thread_count:" + users[0].ID
+	if err := zm.SQL("SELECT COUNT(*) FROM threads WHERE author_id = ?", users[0].ID).
+		CacheKey(countKey).
+		Query(&threadTotal); err != nil {
+		log.Printf("thread count query failed: %v", err)
+	} else {
+		assertf(threadTotal > 0, "thread count should be > 0, got %d", threadTotal)
+		fmt.Printf("thread count validated (%d)\n", threadTotal)
+	}
+
+	// 场景 N: NotFound 行为校验（Query -> Save -> Del）
+	fmt.Println("\n--- [N] NotFound Validation ---")
+	missingID := runPrefix + "missing_feed"
+	missingKey := "feed:" + missingID
+	var missing Feed
+	err = zm.Table("feeds").
+		CacheKey(missingKey).
+		Where("id = ?", missingID).
+		Query(&missing)
+	assertf(errors.Is(err, zmsg.ErrNotFound), "expected not found, got: %v", err)
+	_ = zm.Table("feeds").CacheKey(missingKey).Save(&Feed{
+		ID:      missingID,
+		UserID:  888,
+		Content: runPrefix + "missing_feed_content",
+		Status:  "active",
+	})
+	var found Feed
+	if err := zm.Table("feeds").
+		CacheKey(missingKey).
+		Where("id = ?", missingID).
+		Query(&found); err != nil {
+		log.Printf("missing feed query after save failed: %v", err)
+	} else {
+		assertf(found.ID == missingID, "missing feed id mismatch: %s != %s", found.ID, missingID)
+		fmt.Println("missing feed saved and found")
+	}
+	_ = zm.Table("feeds").
+		CacheKey(missingKey).
+		Where("id = ?", missingID).
+		Del()
+	if err := waitUntil("missing_feed_delete", 10*time.Second, 1*time.Second, func() (bool, error) {
+		err := zm.Table("feeds").
+			CacheKey(missingKey).
+			Where("id = ?", missingID).
+			Query(&missing)
+		if errors.Is(err, zmsg.ErrNotFound) {
+			return true, nil
+		}
+		return false, err
+	}); err != nil {
+		log.Printf("missing feed delete not ready: %v", err)
+	} else {
+		fmt.Println("missing feed delete validated")
+	}
+
+	// 场景 O: Serialize 顺序校验（按提交顺序落库）
+	fmt.Println("\n--- [O] Serialize Order Validation ---")
+	serializeFeedID, _ := zm.NextID(ctx, "feed")
+	replyCount := 30
+	var submitSeq int64
+	var wgSerialize sync.WaitGroup
+	for i := 0; i < replyCount; i++ {
+		wgSerialize.Add(1)
+		go func() {
+			defer wgSerialize.Done()
+			seq := atomic.AddInt64(&submitSeq, 1)
+			replyID, _ := zm.NextID(ctx, "reply")
+			reply := Reply{
+				ID:      replyID,
+				FeedID:  serializeFeedID,
+				UserID:  users[0].ID,
+				Content: fmt.Sprintf("%sreply_%d", runPrefix, seq),
+				Seq:     seq,
+			}
+			if err := zm.Table("replies").
+				CacheKey("reply:" + replyID).
+				Serialize("feed_replies:" + serializeFeedID).
+				Save(reply); err != nil {
+				log.Printf("serialize reply save failed: %v", err)
+			}
+		}()
+	}
+	wgSerialize.Wait()
+
+	var replyRows []Reply
+	if err := waitUntil("serialize_reply_count", 30*time.Second, 1*time.Second, func() (bool, error) {
+		replyRows = replyRows[:0]
+		if err := zm.SQL("SELECT id, feed_id, user_id, parent_id, content, seq, created_at, updated_at FROM replies WHERE feed_id = ? ORDER BY seq ASC, id ASC", serializeFeedID).
+			Query(&replyRows); err != nil {
+			if errors.Is(err, zmsg.ErrNotFound) {
+				return false, nil
+			}
+			return false, err
+		}
+		return len(replyRows) == replyCount, nil
+	}); err != nil {
+		log.Printf("serialize reply count not ready: %v", err)
+	} else {
+		for i, r := range replyRows {
+			expectedSeq := int64(i + 1)
+			expectedContent := fmt.Sprintf("%sreply_%d", runPrefix, expectedSeq)
+			assertf(r.Seq == expectedSeq, "serialize order violated at %d: expected=%d got=%d", i, expectedSeq, r.Seq)
+			assertf(r.Content == expectedContent, "serialize content mismatch at %d: %s != %s", i, r.Content, expectedContent)
+		}
+		fmt.Println("serialize order validated")
+	}
+}
+
+func assertf(cond bool, format string, args ...any) {
+	if !cond {
+		log.Fatalf("ASSERT FAILED: "+format, args...)
+	}
+}
+
+func waitUntil(name string, timeout, interval time.Duration, check func() (bool, error)) error {
+	deadline := time.Now().Add(timeout)
+	for {
+		ok, err := check()
+		if err == nil && ok {
+			return nil
+		}
+		if time.Now().After(deadline) {
+			if err != nil {
+				return fmt.Errorf("%s timeout: %w", name, err)
+			}
+			return fmt.Errorf("%s timeout", name)
+		}
+		time.Sleep(interval)
 	}
 }
 
@@ -451,6 +882,7 @@ type Reply struct {
 	UserID    string    `json:"user_id" db:"user_id"`
 	ParentID  string    `json:"parent_id,omitempty" db:"parent_id"`
 	Content   string    `json:"content" db:"content"`
+	Seq       int64     `json:"seq" db:"seq"`
 	CreatedAt time.Time `json:"created_at" db:"created_at"`
 	UpdatedAt time.Time `json:"updated_at" db:"updated_at"`
 }

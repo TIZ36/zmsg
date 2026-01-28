@@ -6,6 +6,7 @@ import "fmt"
 var (
 	ErrNotFound = &ZMsgError{Code: "NOT_FOUND", Message: "key not found"}
 	ErrClosed   = &ZMsgError{Code: "CLOSED", Message: "zmsg is closed"}
+	ErrGetDisabled = &ZMsgError{Code: "GET_DISABLED", Message: "zmsg get is disabled"}
 )
 
 // ZMsgError 自定义错误

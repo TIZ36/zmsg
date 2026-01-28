@@ -9,8 +9,8 @@ import (
 	"testing"
 	"time"
 
+	zmsg "github.com/tiz36/zmsg/core"
 	"github.com/tiz36/zmsg/tests/testutil"
-	"github.com/tiz36/zmsg/core"
 )
 
 // ============ 全局 zmsg 实例（避免重复初始化）============
@@ -163,8 +163,9 @@ func BenchmarkThroughput(b *testing.B) {
 
 	b.Run("Query", func(b *testing.B) {
 		b.ReportAllocs()
+		var result map[string]any
 		for i := 0; i < b.N; i++ {
-			_, _ = zm.Table("users").CacheKey("1").Query()
+			_ = zm.Table("users").CacheKey("1").Query(&result)
 		}
 	})
 }

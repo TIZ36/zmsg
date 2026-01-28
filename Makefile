@@ -10,10 +10,10 @@ test:
 
 # Integration tests
 integration-test:
-	docker-compose up -d
+	docker compose up -d
 	sleep 5
 	go test -v -run=Integration ./tests/
-	docker-compose down
+	docker compose down
 
 # Lint
 lint:
@@ -31,22 +31,26 @@ run:
 
 # Docker compose
 docker-up:
-	docker-compose up -d
+	docker compose up -d
 
 docker-down:
-	docker-compose down
+	docker compose down
 
-# Benchmark
+# Benchmark (quick run, no report)
+# Requires: docker compose up -d (Redis + PostgreSQL)
 benchmark:
-	go test -bench=. -benchmem -run=^$$ ./tests/
+	go test -bench=. -benchmem -run=NONE ./tests/
 
 # Run benchmark tests and save results
+# Requires: docker compose up -d (Redis + PostgreSQL)
 bench:
+	@echo "=== Checking dependencies ==="
+	@docker compose ps | grep -q "Up" || (echo "Error: Please run 'make docker-up' first" && exit 1)
 	@mkdir -p tests/reports
 	@TIMESTAMP=$$(date +%Y%m%d_%H%M%S); \
 	BENCH_FILE="tests/reports/bench_$$TIMESTAMP.txt"; \
 	echo "=== Running benchmarks ==="; \
-	go test -bench=. -benchmem -benchtime=2s -run=^$$ ./tests/ 2>&1 | tee $$BENCH_FILE; \
+	go test -bench=. -benchmem -benchtime=2s -run=NONE ./tests/ 2>&1 | tee $$BENCH_FILE; \
 	echo ""; \
 	echo "Benchmark results saved to: $$BENCH_FILE"; \
 	ln -sf "bench_$$TIMESTAMP.txt" tests/reports/latest.txt

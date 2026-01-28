@@ -2,7 +2,6 @@ package zmsg
 
 import (
 	"context"
-	"database/sql"
 	"net/http"
 	"time"
 )
@@ -66,7 +65,7 @@ type TableBuilder interface {
 	Del() error
 
 	// Query 查询数据
-	Query() ([]byte, error)
+	Query(dest any) error
 }
 
 // ColumnBuilder 单列操作构建器
@@ -86,11 +85,8 @@ type SQLBuilder interface {
 	// Exec 执行 SQL
 	Exec() (*SQLResult, error)
 
-	// QueryRow 执行 SQL 并扫描到 dest
-	QueryRow(dest ...any) error
-
-	// Query 执行 SQL 并返回 Rows (用于列表查询)
-	Query() (*sql.Rows, error)
+	// Query 执行 SQL 并扫描到 dest
+	Query(dest ...any) error
 }
 
 // ComputeFunc 周期性写计算函数

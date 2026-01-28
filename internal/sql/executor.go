@@ -256,17 +256,16 @@ func (e *Executor) ExecuteBatch(ctx context.Context, tasks []*Task) ([]*Result, 
 }
 
 // Query 查询数据
+// 注意：返回的 rows 需要调用方自行管理（包括 Close）
+// 此方法不在内部设置超时，因为 rows 的迭代在调用方进行
+// 如果需要超时控制，请在调用方的 ctx 上设置
 func (e *Executor) Query(ctx context.Context, task *Task) (*sql.Rows, error) {
 	if err := task.Validate(); err != nil {
 		return nil, fmt.Errorf("invalid task: %w", err)
 	}
 
-	// 设置超时上下文
-	if e.config.QueryTimeout > 0 {
-		var cancel context.CancelFunc
-		ctx, cancel = context.WithTimeout(ctx, e.config.QueryTimeout)
-		defer cancel()
-	}
+	// 注意：这里不再设置超时，避免 defer cancel() 在 rows 迭代完成前执行
+	// 调用方如果需要超时控制，应在传入的 ctx 上设置
 
 	// 准备参数
 	params := make([]interface{}, len(task.Params))
@@ -287,11 +286,11 @@ func (e *Executor) Query(ctx context.Context, task *Task) (*sql.Rows, error) {
 	return rows, nil
 }
 
-// QueryRow 查询单行数据
-func (e *Executor) QueryRow(ctx context.Context, task *Task) *sql.Row {
+// QueryRowScan 查询单行数据并扫描到 dest
+// 此方法在内部完成 Scan，确保 context 超时控制正确工作
+func (e *Executor) QueryRowScan(ctx context.Context, task *Task, dest ...interface{}) error {
 	if err := task.Validate(); err != nil {
-		// 返回一个会出错的Row
-		return &sql.Row{}
+		return fmt.Errorf("invalid task: %w", err)
 	}
 
 	// 设置超时上下文
@@ -309,11 +308,19 @@ func (e *Executor) QueryRow(ctx context.Context, task *Task) *sql.Row {
 
 	start := time.Now()
 	row := e.db.QueryRowContext(ctx, task.Query, params...)
+	err := row.Scan(dest...)
 	duration := time.Since(start)
 
-	e.updateStats(true, duration) // 假设成功，实际错误会在Scan时返回
+	e.updateStats(err == nil, duration)
 
-	return row
+	if err != nil {
+		if err == sql.ErrNoRows {
+			return err
+		}
+		return fmt.Errorf("query row scan failed: %w, query: %s", err, task.Query)
+	}
+
+	return nil
 }
 
 // QueryToMap 查询数据并转换为map

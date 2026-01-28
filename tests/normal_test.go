@@ -9,8 +9,8 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	zmsg "github.com/tiz36/zmsg/core"
 	"github.com/tiz36/zmsg/tests/testutil"
-	"github.com/tiz36/zmsg/core"
 )
 
 // ============ SQL 语法糖测试（纯单元测试，不需要数据库）============
@@ -82,9 +82,13 @@ func TestIntegration_CacheAndStore(t *testing.T) {
 	require.NoError(t, err)
 
 	// 读取
-	result, err := zm.Table("feeds").CacheKey(feedID).Query()
+	var feed struct {
+		ID      string `db:"id,pk"`
+		Content string `db:"content"`
+	}
+	err = zm.Table("feeds").CacheKey(feedID).Query(&feed)
 	require.NoError(t, err)
-	assert.NotEmpty(t, result)
+	assert.Equal(t, "Hello, zmsg!", feed.Content)
 
 	// 清理
 	_ = zm.Table("feeds").CacheKey(feedID).Del()
@@ -102,9 +106,13 @@ func TestIntegration_CacheOnly(t *testing.T) {
 	}{ID: feedID, Content: "test"})
 	require.NoError(t, err)
 
-	result, err := zm.Table("feeds").CacheKey(feedID).Query()
+	var feed struct {
+		ID      string `db:"id,pk"`
+		Content string `db:"content"`
+	}
+	err = zm.Table("feeds").CacheKey(feedID).Query(&feed)
 	require.NoError(t, err)
-	assert.NotEmpty(t, result)
+	assert.Equal(t, "test", feed.Content)
 }
 func TestIntegration_NextID(t *testing.T) {
 	zm := testutil.NewZmsg(t)
@@ -177,7 +185,11 @@ func TestIntegration_DelStore(t *testing.T) {
 	require.NoError(t, err)
 
 	// 查询验证（应该不存在）
-	_, err = zm.Table("feeds").CacheKey(feedID).Query()
+	var feed struct {
+		ID      string `db:"id,pk"`
+		Content string `db:"content"`
+	}
+	err = zm.Table("feeds").CacheKey(feedID).Query(&feed)
 	require.ErrorIs(t, err, zmsg.ErrNotFound)
 }
 
@@ -240,9 +252,9 @@ func TestIntegration_DistributedSerialization(t *testing.T) {
 	time.Sleep(3 * time.Second)
 
 	// 验证最终余额（1000 + 20*10 = 1200）
-	// 注意：使用 SQL().QueryRow() 直接从 DB 验证，忽略缓存
+	// 注意：使用 SQL().Query() 直接从 DB 验证，忽略缓存
 	var balance int64
-	err = zm.SQL("SELECT balance FROM users WHERE id = ?", userID).QueryRow(&balance)
+	err = zm.SQL("SELECT balance FROM users WHERE id = ?", userID).Query(&balance)
 	require.NoError(t, err)
 	assert.Equal(t, int64(1200), balance)
 }
@@ -283,7 +295,7 @@ func TestIntegration_PeriodicMerge(t *testing.T) {
 
 	// 验证 Meta 合并结果
 	var metaStr string
-	err := zm.SQL("SELECT meta FROM users WHERE id = ?", userID).QueryRow(&metaStr)
+	err := zm.SQL("SELECT meta FROM users WHERE id = ?", userID).Query(&metaStr)
 	require.NoError(t, err)
 	assert.Contains(t, metaStr, `"a": 1`)
 	assert.Contains(t, metaStr, `"b": 2`)

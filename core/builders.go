@@ -6,7 +6,9 @@ import (
 	"encoding/json"
 	"fmt"
 	"reflect"
+	"strconv"
 	"strings"
+	"time"
 )
 
 // tableBuilder 实现 TableBuilder 接口
@@ -139,9 +141,45 @@ func (b *tableBuilder) Del() error {
 	return b.z.delStore(ctx, b.cacheKey, task)
 }
 
-func (b *tableBuilder) Query() ([]byte, error) {
+func (b *tableBuilder) Query(dest any) error {
+	if dest == nil {
+		return fmt.Errorf("Query dest is nil")
+	}
 	ctx := context.Background()
-	return b.z.get(ctx, b.cacheKey)
+	if b.cacheKey != "" {
+		if data, err := b.z.cacheGet(ctx, b.cacheKey); err == nil && len(data) > 0 {
+			if err := json.Unmarshal(data, dest); err != nil {
+				return err
+			}
+			return nil
+		} else if err != nil && err != ErrNotFound {
+			return err
+		}
+	}
+
+	query, args, err := b.buildSelectQuery(dest)
+	if err != nil {
+		return err
+	}
+	rows, err := b.z.sqlExec.Query(ctx, convertSQLTask(&SQLTask{Query: query, Params: args}))
+	if err != nil {
+		return err
+	}
+	defer rows.Close()
+
+	if err := scanStruct(rows, dest); err != nil {
+		if err == sql.ErrNoRows {
+			return ErrNotFound
+		}
+		return err
+	}
+
+	if b.cacheKey != "" {
+		if data, err := json.Marshal(dest); err == nil {
+			_ = b.z.updateCache(ctx, b.cacheKey, data, b.z.config.DefaultTTL)
+		}
+	}
+	return nil
 }
 
 // buildSaveTask 构建通用的 INSERT ON CONFLICT SQL
@@ -217,6 +255,66 @@ func (b *tableBuilder) buildSaveTask(data any, jsonData []byte) (*SQLTask, error
 		WhereArgs: vals, // 对于 Save，pk 对应的值在 vals 中（简单假设主键先排序或由用户保证）
 		BatchKey:  fmt.Sprintf("%s:%s:%v", b.table, where, vals),
 	}, nil
+}
+
+func (b *tableBuilder) buildSelectQuery(dest any) (string, []any, error) {
+	if b.table == "" {
+		return "", nil, fmt.Errorf("table name is required")
+	}
+	v := reflect.Indirect(reflect.ValueOf(dest))
+	if v.Kind() != reflect.Struct {
+		return "", nil, fmt.Errorf("Query dest must be a struct or pointer to struct")
+	}
+	cols, pkCols := structColumnsAndPK(v.Type())
+
+	selectCols := "*"
+	if len(cols) > 0 {
+		selectCols = strings.Join(cols, ", ")
+	}
+
+	where := b.where
+	whereArgs := b.whereArgs
+	if where == "" && b.cacheKey != "" {
+		pk := "id"
+		if len(pkCols) == 1 {
+			pk = pkCols[0]
+		} else if len(pkCols) > 1 {
+			return "", nil, fmt.Errorf("composite primary key requires Where()")
+		}
+		where = fmt.Sprintf("%s = ?", pk)
+		whereArgs = []any{b.cacheKey}
+	}
+	if where == "" {
+		return "", nil, fmt.Errorf("Query requires CacheKey() or Where()")
+	}
+
+	query := fmt.Sprintf("SELECT %s FROM %s WHERE %s LIMIT 1", selectCols, b.table, where)
+	return convertPlaceholders(query), whereArgs, nil
+}
+
+func structColumnsAndPK(t reflect.Type) ([]string, []string) {
+	var cols []string
+	var pkCols []string
+	for i := 0; i < t.NumField(); i++ {
+		field := t.Field(i)
+		tag := field.Tag.Get("db")
+		if tag == "" || tag == "-" {
+			continue
+		}
+		parts := strings.Split(tag, ",")
+		colName := parts[0]
+		if colName == "" {
+			colName = field.Name
+		}
+		cols = append(cols, colName)
+		for _, p := range parts[1:] {
+			if p == "pk" {
+				pkCols = append(pkCols, colName)
+				break
+			}
+		}
+	}
+	return cols, pkCols
 }
 
 func (b *tableBuilder) buildUpdateColumnsTask(columns map[string]any) *SQLTask {
@@ -336,14 +434,27 @@ func (b *sqlBuilder) Exec() (*SQLResult, error) {
 	return b.z.execSQL(ctx, task)
 }
 
-func (b *sqlBuilder) QueryRow(dest ...any) error {
+func (b *sqlBuilder) Query(dest ...any) error {
+	if len(dest) == 0 {
+		return fmt.Errorf("Query requires at least one dest")
+	}
 	ctx := context.Background()
 	task := &SQLTask{
 		Query:  b.query,
 		Params: b.args,
 	}
 
-	// 智能判断：如果 dest 只有一个且是 Slice 指针，则执行 Query 并扫描列表
+	if len(dest) == 1 && b.cacheKey != "" {
+		if data, err := b.z.cacheGet(ctx, b.cacheKey); err == nil && len(data) > 0 {
+			if err := json.Unmarshal(data, dest[0]); err != nil {
+				return err
+			}
+			return nil
+		} else if err != nil && err != ErrNotFound {
+			return err
+		}
+	}
+
 	if len(dest) == 1 {
 		val := reflect.ValueOf(dest[0])
 		if val.Kind() == reflect.Ptr && val.Elem().Kind() == reflect.Slice {
@@ -352,20 +463,50 @@ func (b *sqlBuilder) QueryRow(dest ...any) error {
 				return err
 			}
 			defer rows.Close()
-			return scanSlice(rows, dest[0])
+			if err := scanSlice(rows, dest[0]); err != nil {
+				return err
+			}
+		} else if val.Kind() == reflect.Ptr && val.Elem().Kind() == reflect.Struct {
+			rows, err := b.z.sqlExec.Query(ctx, convertSQLTask(task))
+			if err != nil {
+				return err
+			}
+			defer rows.Close()
+			if err := scanStruct(rows, dest[0]); err != nil {
+				if err == sql.ErrNoRows {
+					return ErrNotFound
+				}
+				return err
+			}
+		} else if val.Kind() == reflect.Ptr {
+			if err := b.z.sqlExec.QueryRowScan(ctx, convertSQLTask(task), dest...); err != nil {
+				if err == sql.ErrNoRows {
+					return ErrNotFound
+				}
+				return err
+			}
+		} else {
+			return fmt.Errorf("Query dest must be pointer")
+		}
+	} else {
+		if err := b.z.sqlExec.QueryRowScan(ctx, convertSQLTask(task), dest...); err != nil {
+			if err == sql.ErrNoRows {
+				return ErrNotFound
+			}
+			return err
 		}
 	}
 
-	return b.z.sqlExec.QueryRow(ctx, convertSQLTask(task)).Scan(dest...)
-}
-
-func (b *sqlBuilder) Query() (*sql.Rows, error) {
-	ctx := context.Background()
-	task := &SQLTask{
-		Query:  b.query,
-		Params: b.args,
+	if len(dest) == 1 && b.cacheKey != "" {
+		val := reflect.ValueOf(dest[0])
+		if val.Kind() == reflect.Ptr && (val.Elem().Kind() == reflect.Struct || val.Elem().Kind() == reflect.Slice) {
+			if data, err := json.Marshal(dest[0]); err == nil {
+				_ = b.z.updateCache(ctx, b.cacheKey, data, b.z.config.DefaultTTL)
+			}
+		}
 	}
-	return b.z.sqlExec.Query(ctx, convertSQLTask(task))
+
+	return nil
 }
 
 // ============ SQLTask 链式方法（PostgreSQL 特性）============
@@ -487,9 +628,15 @@ func scanSlice(rows *sql.Rows, dest any) error {
 
 		// 准备 Scan 目标
 		scanDest := make([]any, len(columns))
+		postScan := make([]func(), 0, len(columns))
 		for i, col := range columns {
 			if idx, ok := fieldMap[col]; ok {
-				scanDest[i] = newElem.Field(idx).Addr().Interface()
+				field := newElem.Field(idx)
+				scanTarget, apply := buildScanTarget(field)
+				scanDest[i] = scanTarget
+				if apply != nil {
+					postScan = append(postScan, apply)
+				}
 			} else {
 				// 忽略未知列
 				var ignore any
@@ -499,6 +646,9 @@ func scanSlice(rows *sql.Rows, dest any) error {
 
 		if err := rows.Scan(scanDest...); err != nil {
 			return err
+		}
+		for _, apply := range postScan {
+			apply()
 		}
 
 		if isPtr {
@@ -511,4 +661,386 @@ func scanSlice(rows *sql.Rows, dest any) error {
 	}
 
 	return rows.Err()
+}
+
+// scanStruct 扫描 Rows 到单个 Struct（仅取第一行）
+func scanStruct(rows *sql.Rows, dest any) error {
+	val := reflect.ValueOf(dest)
+	if val.Kind() != reflect.Ptr || val.Elem().Kind() != reflect.Struct {
+		return fmt.Errorf("scanStruct: expected pointer to struct, got %s", val.Kind())
+	}
+
+	structVal := val.Elem()
+	structType := structVal.Type()
+
+	columns, err := rows.Columns()
+	if err != nil {
+		return err
+	}
+
+	fieldMap := make(map[string]int)
+	for i := 0; i < structType.NumField(); i++ {
+		field := structType.Field(i)
+		tag := field.Tag.Get("db")
+		if tag == "-" {
+			continue
+		}
+		name := strings.Split(tag, ",")[0]
+		if name == "" {
+			name = field.Name
+		}
+		fieldMap[name] = i
+	}
+
+	if !rows.Next() {
+		return sql.ErrNoRows
+	}
+
+	scanDest := make([]any, len(columns))
+	postScan := make([]func(), 0, len(columns))
+	for i, col := range columns {
+		if idx, ok := fieldMap[col]; ok {
+			field := structVal.Field(idx)
+			scanTarget, apply := buildScanTarget(field)
+			scanDest[i] = scanTarget
+			if apply != nil {
+				postScan = append(postScan, apply)
+			}
+		} else {
+			var ignore any
+			scanDest[i] = &ignore
+		}
+	}
+
+	if err := rows.Scan(scanDest...); err != nil {
+		return err
+	}
+	for _, apply := range postScan {
+		apply()
+	}
+
+	return rows.Err()
+}
+
+// scanScalar 扫描 Rows 到单个基础类型（仅取第一行）
+func scanScalar(rows *sql.Rows, dest any) error {
+	if !rows.Next() {
+		return sql.ErrNoRows
+	}
+
+	scanDest, apply, err := buildScanTargetForPtr(dest)
+	if err != nil {
+		return err
+	}
+
+	if err := rows.Scan(scanDest); err != nil {
+		return err
+	}
+	if apply != nil {
+		apply()
+	}
+	return rows.Err()
+}
+
+var (
+	nullStringType  = reflect.TypeOf(sql.NullString{})
+	nullInt64Type   = reflect.TypeOf(sql.NullInt64{})
+	nullFloat64Type = reflect.TypeOf(sql.NullFloat64{})
+	nullBoolType    = reflect.TypeOf(sql.NullBool{})
+	nullTimeType    = reflect.TypeOf(sql.NullTime{})
+	timeType        = reflect.TypeOf(time.Time{})
+)
+
+func buildScanTarget(field reflect.Value) (any, func()) {
+	if !field.CanSet() {
+		var ignore any
+		return &ignore, nil
+	}
+
+	fieldType := field.Type()
+	switch fieldType {
+	case nullStringType, nullInt64Type, nullFloat64Type, nullBoolType, nullTimeType:
+		return field.Addr().Interface(), nil
+	}
+
+	// 指针字段：NULL -> nil，非 NULL -> 指向具体值
+	if field.Kind() == reflect.Ptr {
+		elem := fieldType.Elem()
+		switch elem.Kind() {
+		case reflect.String:
+			ns := &sql.NullString{}
+			return ns, func() {
+				if ns.Valid {
+					v := ns.String
+					field.Set(reflect.ValueOf(&v))
+				} else {
+					field.Set(reflect.Zero(fieldType))
+				}
+			}
+		case reflect.Int, reflect.Int8, reflect.Int16, reflect.Int32, reflect.Int64:
+		ni := &int64Scanner{}
+			return ni, func() {
+				if ni.Valid {
+					v := reflect.New(elem).Elem()
+				v.SetInt(ni.Int64)
+					field.Set(v.Addr())
+				} else {
+					field.Set(reflect.Zero(fieldType))
+				}
+			}
+		case reflect.Uint, reflect.Uint8, reflect.Uint16, reflect.Uint32, reflect.Uint64:
+		nu := &int64Scanner{}
+			return nu, func() {
+				if nu.Valid && nu.Int64 >= 0 {
+					v := reflect.New(elem).Elem()
+				v.SetUint(uint64(nu.Int64))
+					field.Set(v.Addr())
+				} else {
+					field.Set(reflect.Zero(fieldType))
+				}
+			}
+		case reflect.Float32, reflect.Float64:
+			nf := &sql.NullFloat64{}
+			return nf, func() {
+				if nf.Valid {
+					v := reflect.New(elem).Elem()
+					v.SetFloat(nf.Float64)
+					field.Set(v.Addr())
+				} else {
+					field.Set(reflect.Zero(fieldType))
+				}
+			}
+		case reflect.Bool:
+			nb := &sql.NullBool{}
+			return nb, func() {
+				if nb.Valid {
+					v := reflect.New(elem).Elem()
+					v.SetBool(nb.Bool)
+					field.Set(v.Addr())
+				} else {
+					field.Set(reflect.Zero(fieldType))
+				}
+			}
+		default:
+			if elem == timeType {
+				nt := &sql.NullTime{}
+				return nt, func() {
+					if nt.Valid {
+						v := reflect.New(elem).Elem()
+						v.Set(reflect.ValueOf(nt.Time))
+						field.Set(v.Addr())
+					} else {
+						field.Set(reflect.Zero(fieldType))
+					}
+				}
+			}
+		}
+	}
+
+	// 非指针字段：NULL -> 零值
+	switch field.Kind() {
+	case reflect.String:
+		ns := &sql.NullString{}
+		return ns, func() {
+			if ns.Valid {
+				field.SetString(ns.String)
+			} else {
+				field.SetString("")
+			}
+		}
+	case reflect.Int, reflect.Int8, reflect.Int16, reflect.Int32, reflect.Int64:
+	ni := &int64Scanner{}
+		return ni, func() {
+			if ni.Valid {
+				field.SetInt(ni.Int64)
+			} else {
+				field.SetInt(0)
+			}
+		}
+	case reflect.Uint, reflect.Uint8, reflect.Uint16, reflect.Uint32, reflect.Uint64:
+	nu := &int64Scanner{}
+		return nu, func() {
+			if nu.Valid && nu.Int64 >= 0 {
+				field.SetUint(uint64(nu.Int64))
+			} else {
+				field.SetUint(0)
+			}
+		}
+	case reflect.Float32, reflect.Float64:
+		nf := &sql.NullFloat64{}
+		return nf, func() {
+			if nf.Valid {
+				field.SetFloat(nf.Float64)
+			} else {
+				field.SetFloat(0)
+			}
+		}
+	case reflect.Bool:
+		nb := &sql.NullBool{}
+		return nb, func() {
+			if nb.Valid {
+				field.SetBool(nb.Bool)
+			} else {
+				field.SetBool(false)
+			}
+		}
+	default:
+		if fieldType == timeType {
+			nt := &sql.NullTime{}
+			return nt, func() {
+				if nt.Valid {
+					field.Set(reflect.ValueOf(nt.Time))
+				} else {
+					field.Set(reflect.Zero(fieldType))
+				}
+			}
+		}
+	}
+
+	return field.Addr().Interface(), nil
+}
+
+func buildScanTargetsForPtrs(dest []any) ([]any, []func(), error) {
+	scanDest := make([]any, len(dest))
+	postScan := make([]func(), 0, len(dest))
+	for i, d := range dest {
+		target, apply, err := buildScanTargetForPtr(d)
+		if err != nil {
+			return nil, nil, err
+		}
+		scanDest[i] = target
+		if apply != nil {
+			postScan = append(postScan, apply)
+		}
+	}
+	return scanDest, postScan, nil
+}
+
+func buildScanTargetForPtr(dest any) (any, func(), error) {
+	val := reflect.ValueOf(dest)
+	if val.Kind() != reflect.Ptr {
+		return nil, nil, fmt.Errorf("scan target must be pointer, got %s", val.Kind())
+	}
+
+	elem := val.Elem()
+	elemType := elem.Type()
+	switch elemType {
+	case nullStringType, nullInt64Type, nullFloat64Type, nullBoolType, nullTimeType:
+		return dest, nil, nil
+	}
+
+	switch elem.Kind() {
+	case reflect.String:
+		ns := &sql.NullString{}
+		return ns, func() {
+			if ns.Valid {
+				elem.SetString(ns.String)
+			} else {
+				elem.SetString("")
+			}
+		}, nil
+	case reflect.Int, reflect.Int8, reflect.Int16, reflect.Int32, reflect.Int64:
+	ni := &int64Scanner{}
+		return ni, func() {
+			if ni.Valid {
+				elem.SetInt(ni.Int64)
+			} else {
+				elem.SetInt(0)
+			}
+		}, nil
+	case reflect.Uint, reflect.Uint8, reflect.Uint16, reflect.Uint32, reflect.Uint64:
+	nu := &int64Scanner{}
+		return nu, func() {
+			if nu.Valid && nu.Int64 >= 0 {
+				elem.SetUint(uint64(nu.Int64))
+			} else {
+				elem.SetUint(0)
+			}
+		}, nil
+	case reflect.Float32, reflect.Float64:
+		nf := &sql.NullFloat64{}
+		return nf, func() {
+			if nf.Valid {
+				elem.SetFloat(nf.Float64)
+			} else {
+				elem.SetFloat(0)
+			}
+		}, nil
+	case reflect.Bool:
+		nb := &sql.NullBool{}
+		return nb, func() {
+			if nb.Valid {
+				elem.SetBool(nb.Bool)
+			} else {
+				elem.SetBool(false)
+			}
+		}, nil
+	default:
+		if elemType == timeType {
+			nt := &sql.NullTime{}
+			return nt, func() {
+				if nt.Valid {
+					elem.Set(reflect.ValueOf(nt.Time))
+				} else {
+					elem.Set(reflect.Zero(elemType))
+				}
+			}, nil
+		}
+	}
+
+	return dest, nil, nil
+}
+
+type int64Scanner struct {
+	Valid bool
+	Int64 int64
+}
+
+func (s *int64Scanner) Scan(src any) error {
+	if src == nil {
+		s.Valid = false
+		s.Int64 = 0
+		return nil
+	}
+
+	switch v := src.(type) {
+	case int64:
+		s.Valid = true
+		s.Int64 = v
+		return nil
+	case int32:
+		s.Valid = true
+		s.Int64 = int64(v)
+		return nil
+	case int:
+		s.Valid = true
+		s.Int64 = int64(v)
+		return nil
+	case float64:
+		s.Valid = true
+		s.Int64 = int64(v)
+		return nil
+	case []byte:
+		n, err := strconv.ParseInt(string(v), 10, 64)
+		if err != nil {
+			return err
+		}
+		s.Valid = true
+		s.Int64 = n
+		return nil
+	case string:
+		n, err := strconv.ParseInt(v, 10, 64)
+		if err != nil {
+			return err
+		}
+		s.Valid = true
+		s.Int64 = n
+		return nil
+	case time.Time:
+		s.Valid = true
+		s.Int64 = v.Unix()
+		return nil
+	default:
+		return fmt.Errorf("unsupported int64 scan type %T", src)
+	}
 }
